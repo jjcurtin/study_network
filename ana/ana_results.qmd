@@ -1,0 +1,272 @@
+---
+title: "Analysis on Models with Contact Network Features"
+author: "Coco Yu"
+date: "`r lubridate::today()`"
+format:
+  html:
+    toc: true 
+    toc_depth: 4
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+### Setup
+
+Chunk Defaults
+```{r}
+knitr::opts_chunk$set(attr.output='style="max-height: 500px;"')
+
+suppressPackageStartupMessages(library(tidyposterior))
+library(tidyverse)
+library(tidymodels)
+options(conflicts.policy = "depends.ok")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_ml.R?raw=true")
+
+library(kableExtra, exclude = "group_rows")
+library(lubridate)
+library(janitor, include.only = c("tabyl", "clean_names"))
+library(Matrix, exclude = c("expand", "pack", "unpack"))
+library(poissonreg)
+library(DALEX, exclude= "explain")
+library(DALEXtra)
+
+theme_set(theme_classic()) 
+```
+
+Absolute Paths 
+```{r}
+source("https://github.com/jjcurtin/lab_support/blob/main/format_path.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_eda.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_plots.R?raw=true")
+source("_lib/ana_models.R")
+
+path_network <- format_path(str_c("risk/data_processed/network"))
+path_models <- format_path(str_c("risk/models/network"))
+```
+
+### Read in Data
+
+```{r}
+fits_glmnet <- read_rds(here::here(path_models, "fits_lst_v2.rds"))
+err_tbl_glmnet <- read_csv("_results/err_tbl_v2.csv")
+fits_xgboost <- read_rds(here::here(path_models, "fits_lst_v3.rds"))
+err_tbl_xgboost <- read_csv("_results/err_tbl_v3.csv")
+fits_rf <- read_rds(here::here(path_models, "fits_lst_v4.rds"))
+err_tbl_rf <- read_csv("_results/err_tbl_v4.csv")
+```
+
+```{r}
+features_v3 <- read_csv(here::here(path_network, "features_network_v3.csv"))
+baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
+labels <- read_csv(here::here(path_network, "labels.csv"))
+
+data_continuous <- features_v3 |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
+  left_join(baseline, by = "subid") |>
+  select(-n_lapse, -day_on_study, -subid) |>
+	mutate(across(where(is.character), as.factor),
+           across(where(is.factor), ~ factor(.x, levels = levels(.x)))) |> 
+  glimpse()
+
+data_binary <- features_v3 |> 
+  left_join(labels, by = "subid") |> 
+  mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
+  left_join(baseline, by = "subid") |>
+  select(-subid, -n_lapse, -day_on_study) |> 
+	mutate(across(where(is.character), as.factor),
+           across(where(is.factor), ~ factor(.x, levels = levels(.x))))
+  glimpse()
+```
+
+**Combine and clean up results**
+
+```{r}
+err_tbl <- err_tbl_glmnet |> 
+  bind_rows(err_tbl_xgboost) |> 
+	mutate(id = 1:nrow(err_tbl))
+
+fits <- c(fits_glmnet, fits_xgboost)
+```
+
+### Bayesian Comparison
+
+#### Continuous Outcomes
+
+```{r}
+id_continuous_baseline <- err_tbl |> 
+  filter(outcome == "continuous" & feature_set == "baseline") |> 
+	arrange(desc(rsq_mean)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+id_continuous_full <- err_tbl |> 
+	filter(outcome == "continuous" & feature_set != "baseline") |> 
+	arrange(desc(rsq_mean)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+baseline_continuous <- best_config_metrics(
+	fits[[id_continuous_baseline]], metric = "rsq")
+full_continuous <- best_config_metrics(
+	fits[[id_continuous_full]], metric = "rsq")
+```
+
+```{r}
+pp_continuous <- get_posterior(baseline_continuous, full_continuous)
+```
+
+```{r}
+sum_perf(pp_continuous)
+plot_contrast(pp_continuous)
+contrast_perf(pp_continuous)
+```
+
+#### Binary
+
+```{r}
+id_binary_baseline <- err_tbl |> 
+  filter(str_detect(outcome, "binary") & feature_set == "baseline") |> 
+	arrange(desc(roc_auc_trn)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+id_binary_full <- err_tbl |> 
+	filter(str_detect(outcome, "binary") & feature_set != "baseline") |> 
+	arrange(desc(roc_auc_trn)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+baseline_binary <- best_config_metrics(
+	fits[[id_binary_baseline]], metric = "roc_auc")
+full_binary <- best_config_metrics(
+	fits[[id_binary_full]], metric = "roc_auc")
+```
+
+```{r}
+pp_binary <- get_posterior(baseline_binary, full_binary)
+```
+
+```{r}
+sum_perf(pp_binary)
+plot_contrast(pp_binary)
+contrast_perf(pp_binary)
+```
+
+### Interpretation
+
+### Continuous
+
+```{r}
+rec <- recipe(lapse ~ ., data = data_continuous) |> 
+      step_select(-starts_with("prop_")) |> 
+      step_impute_median(all_numeric_predictors()) |> 
+      step_impute_mode(all_nominal_predictors()) |>
+      step_dummy(all_nominal_predictors()) |>
+      step_zv(all_predictors()) |> 
+      step_nzv(all_predictors())
+
+feat <- rec |> prep(data_continuous) |> bake(new_data = NULL)
+
+best_model_continuous <-
+  boost_tree(learn_rate = select_best(fits[[id_continuous_full]],
+                                      metric = "rsq")$learn_rate,
+             mtry = select_best(fits[[id_continuous_full]],
+                                metric = "rsq")$mtry,
+             tree_depth = select_best(fits[[id_continuous_full]],
+                                      metric = "rsq")$tree_depth) |>
+  set_engine("xgboost", objective = "reg:squarederror") |> 
+  set_mode("regression") |>
+  fit(lapse ~ ., data = feat)
+```
+
+```{r}
+shaps <- SHAPforxgboost::shap.prep(xgb_model = 
+                                   extract_fit_engine(best_model_continuous),
+                     X_train = feat |> select(-lapse) |>  as.matrix())
+
+shaps |>
+  group_by(variable) |>
+  summarise(
+    mean_abs_shap = mean(abs(value), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(mean_abs_shap))
+
+shaps |>
+  group_by(variable) |>
+  summarise(
+    mean_abs_shap = mean(abs(value), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(mean_abs_shap)) |> 
+	mutate(variable_name = factor(variable),
+         variable_name = fct_reorder(variable_name, mean_abs_shap)) |>
+  ggplot(aes(x = variable_name, y = mean_abs_shap)) +
+  geom_point() +
+  coord_flip()
+
+```
+
+```{r}
+predict_wrapper <- function(model, newdata) {
+  predict(model, newdata) |> 
+    pull(.pred)
+}
+
+get_shaps <- function(df1){
+  predict_parts(explain_full, 
+                new_observation = df1,
+                type = "shap",
+                B = 25) |> 
+    filter(B == 0) |> 
+    select(variable_name, variable_value, contribution) |> 
+    as_tibble()
+}
+
+explain_full <- explain_tidymodels(best_model_continuous,  
+                                   data = feat, 
+                                   y = data_continuous$lapse, 
+                                   predict_function = predict_wrapper)
+
+shap_2 <- feat |>
+  slice_sample(prop = 1/5) |>
+  mutate(id = row_number()) |>
+  nest(.by = id, .key = "dfs") |> 
+  mutate(shaps = map(dfs, \(df1) get_shaps(df1))) |> 
+  select(-dfs) |>
+  unnest(shaps)
+
+```
+
+### Binary
+
+```{r}
+rec <- recipe(lapse ~ ., data = data_binary) |> 
+      step_select(-starts_with("n_")) |> 
+      step_impute_median(all_numeric_predictors()) |> 
+      step_impute_mode(all_nominal_predictors()) |> 
+      step_dummy(all_nominal_predictors()) |> 
+      themis::step_upsample(lapse, over_ratio = 1) |> 
+      step_zv(all_predictors()) |> 
+      step_nzv(all_predictors()) |>
+      step_normalize(all_numeric_predictors())
+
+best_model_binary <-
+  logistic_reg(penalty = select_best(fits[[id_binary_full]],
+	                                 metric = "roc_auc")$penalty, 
+             mixture = select_best(fits[[id_binary_full]], 
+                                   metric = "roc_auc")$mixture) |>
+  set_engine("glmnet") |> 
+  fit(lapse ~ ., data = rec |> prep(data_binary) |> bake(new_data = NULL))
+
+best_model_binary |> 
+  tidy() |> 
+	arrange(desc(abs(estimate))) |>
+	print_kbl()
+```

@@ -1,0 +1,465 @@
+---
+title: "GLMNET Models with Contact Network Features"
+author: "Coco Yu"
+date: "`r lubridate::today()`"
+format:
+  html:
+    toc: true 
+    toc_depth: 4
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+### Setup
+
+Chunk Defaults
+```{r}
+knitr::opts_chunk$set(attr.output='style="max-height: 500px;"')
+
+library(tidyverse)
+library(tidymodels)
+options(conflicts.policy = "depends.ok")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_ml.R?raw=true")
+
+library(kableExtra, exclude = "group_rows")
+library(lubridate)
+library(janitor, include.only = c("tabyl", "clean_names"))
+library(Matrix, exclude = c("expand", "pack", "unpack"))
+library(poissonreg)
+
+theme_set(theme_classic()) 
+```
+
+Absolute Paths 
+```{r}
+source("https://github.com/jjcurtin/lab_support/blob/main/format_path.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_eda.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_plots.R?raw=true")
+source("_lib/run_models.R")
+source("_lib/update_results.R")
+source("_lib/ana_models.R")
+
+# path_shared <- format_path(str_c("risk/data_processed/shared"))
+path_network <- format_path(str_c("risk/data_processed/network"))
+path_models <- format_path(str_c("risk/models/network"))
+```
+
+### Read in Data
+
+```{r}
+features_v1 <- read_csv(here::here(path_network, "features_network_v1.csv"))
+features_v2 <- read_csv(here::here(path_network, "features_network_v2.csv"))
+features_v3 <- read_csv(here::here(path_network, "features_network_v3.csv"))
+features_v4 <- read_csv(here::here(path_network, "features_network_v4.csv"))
+labels <- read_csv(here::here(path_network, "labels.csv"))
+baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
+```
+
+### Modeling 
+
+```{r}
+err_tbl <- tibble()
+best_models <- list()
+fits_lst <- list()
+```
+
+#### Baseline Models
+
+##### Continuous Outcome
+
+```{r}
+data <- baseline |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
+  select(-n_lapse, -day_on_study, -subid) |>
+  glimpse()
+
+# poisson model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "baseline"),
+               feature_file = "features_baseline")
+
+# linear model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "baseline"),
+               feature_file = "features_baseline"
+               )
+
+```
+
+##### Binary Outcome
+```{r}
+data <- baseline |> 
+  left_join(labels, by = "subid") |> 
+  mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
+  select(-subid, -n_lapse, -day_on_study) |> 
+  glimpse()
+
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "baseline"),
+               feature_file = "features_baseline")
+```
+
+#### Features v1
+
+##### Continuous Outcome
+
+```{r}
+data <- features_v1 |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
+  left_join(baseline, by = "subid") |>
+  select(-n_lapse, -day_on_study, -subid) |>
+  glimpse()
+
+# poisson model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "raw"),
+               feature_file = "features_v1")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "prop"),
+               feature_file = "features_v1")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "all"),
+               feature_file = "features_v1")
+# linear model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "raw"),
+               feature_file = "features_v1")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "prop"),
+               feature_file = "features_v1")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "all"),
+               feature_file = "features_v1")
+```
+
+##### Binary Outcome
+
+**high vs. low lapse**
+```{r}
+data <- features_v1 |> 
+  left_join(labels, by = "subid") |> 
+  mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
+  left_join(baseline, by = "subid") |>
+  select(-subid, -n_lapse, -day_on_study) |> 
+  glimpse()
+
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "raw"),
+               feature_file = "features_v1")
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "prop"),
+               feature_file = "features_v1")
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "all"),
+               feature_file = "features_v1")
+```
+
+
+#### Features v2
+
+##### Continuous Outcome
+
+```{r}
+data <- features_v2 |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
+  left_join(baseline, by = "subid") |>
+  select(-n_lapse, -day_on_study, -subid) |>
+  glimpse()
+
+# poisson model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "raw"),
+               feature_file = "features_v2")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "prop"),
+               feature_file = "features_v2")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "all"),
+               feature_file = "features_v2")
+# linear model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "raw"),
+               feature_file = "features_v2")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "prop"),
+               feature_file = "features_v2")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "all"),
+               feature_file = "features_v2")
+```
+
+##### Binary Outcome
+
+
+**high vs. low lapse**
+```{r}
+data <- features_v2 |> 
+  left_join(labels, by = "subid") |> 
+  mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
+  left_join(baseline, by = "subid") |>
+  select(-subid, -n_lapse, -day_on_study) |> 
+  glimpse()
+
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "raw"),
+               feature_file = "features_v2")
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "prop"),
+               feature_file = "features_v2")
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "all"),
+               feature_file = "features_v2")
+```
+
+#### Features v3
+
+##### Continuous Outcome
+
+```{r}
+data <- features_v3 |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
+  left_join(baseline, by = "subid") |>
+  select(-n_lapse, -day_on_study, -subid) |>
+  glimpse()
+
+# poisson model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "raw"),
+               feature_file = "features_v3")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "prop"),
+               feature_file = "features_v3")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "all"),
+               feature_file = "features_v3")
+# linear model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "raw"),
+               feature_file = "features_v3")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "prop"),
+               feature_file = "features_v3")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "all"),
+               feature_file = "features_v3")
+```
+
+##### Binary Outcome
+
+**high vs. low lapse**
+```{r}
+data <- features_v3 |> 
+  left_join(labels, by = "subid") |> 
+  mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
+  left_join(baseline, by = "subid") |>
+  select(-subid, -n_lapse, -day_on_study) |> 
+  glimpse()
+
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "raw"),
+               feature_file = "features_v3")
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "prop"),
+               feature_file = "features_v3")
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "all"),
+               feature_file = "features_v3")
+```
+
+#### Features v4
+
+##### Continuous Outcome
+
+```{r}
+data <- features_v4 |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
+  left_join(baseline, by = "subid") |>
+  select(-n_lapse, -day_on_study, -subid) |>
+  glimpse()
+
+# poisson model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "raw"),
+               feature_file = "features_v4")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "prop"),
+               feature_file = "features_v4")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "poisson", feature_set = "all"),
+               feature_file = "features_v4")
+# linear model
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "raw"),
+               feature_file = "features_v4")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "prop"),
+               feature_file = "features_v4")
+update_results(run_glmnet(data = data, outcome = "continuous", 
+                          model = "normal", feature_set = "all"),
+               feature_file = "features_v4")
+```
+
+##### Binary Outcome
+
+
+**high vs. low lapse**
+```{r}
+data <- features_v4 |> 
+  left_join(labels, by = "subid") |> 
+  mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
+  left_join(baseline, by = "subid") |>
+  select(-subid, -n_lapse, -day_on_study) |> 
+  glimpse()
+
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "raw"),
+               feature_file = "features_v4")
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "prop"),
+               feature_file = "features_v4")
+update_results(run_glmnet(data = data, outcome = "binary_high_low", 
+                          model = "logistic", feature_set = "all"),
+               feature_file = "features_v4")
+```
+
+### Check Model Results
+
+```{r}
+err_tbl |> 
+  filter(outcome == "continuous") |> 
+  pull(id) |> 
+  map(\(id) plot_hyperparameters(fits_lst[[id]], hp1 = "penalty", hp2 = "mixture", 
+                                  metric = fits_lst[[id]]$.metrics[[1]]$.metric[1])) |> 
+  cowplot::plot_grid(plotlist = _, ncol = 3)
+
+err_tbl |> 
+  filter(str_detect(outcome, "binary")) |> 
+  pull(id) |> 
+  map(\(id) plot_hyperparameters(fits_lst[[id]], hp1 = "penalty", hp2 = "mixture", 
+                                  metric = fits_lst[[id]]$.metrics[[1]]$.metric[1])) |> 
+  cowplot::plot_grid(plotlist = _, ncol = 3)
+
+```
+
+```{r}
+err_tbl |> 
+  filter(outcome == "continuous") |> 
+  pull(id) |> 
+  map(\(id) best_config_metrics_hist(best_config_metrics(fits_lst[[id]], 
+                                      metric = fits_lst[[id]]$.metrics[[1]]$.metric[1]))) |> 
+  cowplot::plot_grid(plotlist = _, ncol = 3)
+
+err_tbl |> 
+  filter(str_detect(outcome, "binary")) |> 
+  pull(id) |> 
+  map(\(id) best_config_metrics_hist(best_config_metrics(fits_lst[[id]], 
+                                      metric = fits_lst[[id]]$.metrics[[1]]$.metric[1]))) |> 
+  cowplot::plot_grid(plotlist = _, ncol = 3)
+
+```
+
+```{r}
+err_tbl |> 
+  filter(outcome == "continuous") |> 
+  arrange(desc(rsq_mean)) |> 
+  print_kbl()
+
+err_tbl |> 
+  filter(str_detect(outcome, "binary")) |> 
+  arrange(desc(roc_auc_trn)) |> 
+  print_kbl()
+```
+
+```{r}
+best_models |> 
+  map(\(model) tidy(model) |> arrange(desc(abs(estimate))) |> print_kbl())
+```
+
+```{r}
+# err_tbl |>
+#   write_csv("_results/err_tbl_v2.csv")
+# 
+# fits_lst |>
+#   write_rds(here::here(path_models, "fits_lst_v2.rds"))
+
+best_models |> 
+  write_rds(here::here(path_models, "best_models_v2.rds"))
+```
+
+
+
+----------------
+Debugging
+----------------
+
+```{r}
+data <- baseline |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
+  select(-n_lapse, -day_on_study, -subid) |>
+  mutate(across(where(is.character), as.factor),
+         across(where(is.factor), ~ factor(.x, levels = levels(.x)))) |>
+  glimpse()
+
+set.seed(20200202)
+splits <- data |>
+  vfold_cv(v = 5, repeats = 6, strata = "lapse")
+
+grid_glmnet = expand_grid(penalty = exp(seq(-9, 3,
+                                                  length.out = 500)),
+                                                 mixture = seq(0, 1, 
+                                                  length.out = 6))
+```
+
+```{r}
+map_dbl(1:30, ~ splits$splits[[.x]] |> analysis() |> pull(lapse) |>  sd()) |> 
+  as_tibble() |> print_kbl()
+
+map_dbl(1:30, ~ splits$splits[[.x]] |> assessment() |> pull(lapse) |>  sd()) |> 
+  as_tibble() |> print_kbl()
+```
+
+```{r}
+fits_glmnet <- poisson_reg(penalty = tune(), mixture = tune()) |>
+  set_engine("glmnet", maxit = 1000000) |> 
+  tune_grid(preprocessor = rec, 
+            resamples = splits, grid = grid_glmnet, 
+            metrics = metric_set(rsq))
+
+collect_metrics(fits_glmnet) |> 
+  filter(is.na(mean)) |> 
+  print_kbl()
+```
+
+```{r}
+data_trn <- splits$splits[[1]] |> analysis()
+data_test <- splits$splits[[1]] |> assessment()
+
+rec <- recipe(lapse ~ ., data = data) |> 
+  step_impute_median(all_numeric_predictors()) |> 
+  step_impute_mode(all_nominal_predictors()) |>
+  step_dummy(all_nominal_predictors()) |> 
+  step_zv(all_predictors()) |> 
+  step_nzv(all_predictors()) |>
+  step_normalize(all_numeric_predictors())
+
+feat_trn <- rec |> prep(data_trn) |> bake(new_data = NULL)
+feat_test <- rec |> prep(data_trn) |> bake(new_data = data_test)
+
+fit <- poisson_reg(penalty = 10.49, mixture = 0.4) |>
+  set_engine("glmnet", maxit = 1000000) |> 
+  fit(lapse ~ ., data = feat_trn)
+
+fit |> tidy()
+
+preds <- predict(fit, new_data = feat_test) |>
+  bind_cols(feat_test |> select(lapse))
+
+rsq(preds, truth = lapse, estimate = .pred)
+```

@@ -1,0 +1,130 @@
+---
+title: "Analysis on GLMNET Models with Contact Network Features"
+author: "Coco Yu"
+date: "`r lubridate::today()`"
+format:
+  html:
+    toc: true 
+    toc_depth: 4
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+### Setup
+
+Chunk Defaults
+```{r}
+knitr::opts_chunk$set(attr.output='style="max-height: 500px;"')
+
+suppressPackageStartupMessages(library(tidyposterior))
+library(tidyverse)
+library(tidymodels)
+options(conflicts.policy = "depends.ok")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_ml.R?raw=true")
+
+library(kableExtra, exclude = "group_rows")
+library(lubridate)
+library(janitor, include.only = c("tabyl", "clean_names"))
+library(Matrix, exclude = c("expand", "pack", "unpack"))
+library(poissonreg)
+
+theme_set(theme_classic()) 
+```
+
+Absolute Paths 
+```{r}
+source("https://github.com/jjcurtin/lab_support/blob/main/format_path.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_eda.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_plots.R?raw=true")
+source("_lib/ana_models.R")
+
+path_network <- format_path(str_c("risk/data_processed/network"))
+path_models <- format_path(str_c("risk/models/network"))
+```
+
+### Read in Data
+
+```{r}
+# fits <- read_rds("_results/fits_lst_v2.rds")
+fits <- read_rds(here::here(path_models, "fits_lst_v2.rds"))
+err_tbl <- read_csv("_results/err_tbl_v2.csv")
+```
+
+### Bayesian Comparison
+
+```{r}
+baseline_poisson <- best_config_metrics(fits[[1]], metric = "rsq")
+baseline_normal <- best_config_metrics(fits[[2]], metric = "rsq")
+baseline_binary <- best_config_metrics(fits[[3]], metric = "roc_auc")
+```
+
+```{r}
+pp_lst_poisson <- err_tbl |> 
+  filter(outcome == "continuous" & model == "poisson" & 
+          feature_set != "baseline") |>
+  pull(id) |>
+  map(\(id) get_posterior(baseline_poisson, 
+                          best_config_metrics(fits[[id]], metric = "rsq")))
+
+pp_lst_normal <- err_tbl |> 
+  filter(outcome == "continuous" & model == "normal" & 
+          feature_set != "baseline") |>
+  pull(id) |>
+  map(\(id) get_posterior(baseline_normal, 
+                          best_config_metrics(fits[[id]], metric = "rsq")))
+
+pp_lst_binary <- err_tbl |> 
+  filter(str_detect(outcome, "binary") & model == "logistic" & 
+          feature_set != "baseline") |>
+  pull(id) |>
+  map(\(id) get_posterior(baseline_binary, 
+                          best_config_metrics(fits[[id]], metric = "roc_auc")))
+```
+
+```{r}
+pp_lst_poisson |> 
+  map(\(pp) plot_contrast(pp)) |> 
+  cowplot::plot_grid(plotlist = _, ncol = 3)
+
+pp_lst_normal |> 
+  map(\(pp) plot_contrast(pp)) |> 
+  cowplot::plot_grid(plotlist = _, ncol = 3)
+
+pp_lst_binary |> 
+  map(\(pp) plot_contrast(pp)) |> 
+  cowplot::plot_grid(plotlist = _, ncol = 3)
+```
+
+
+```{r}
+pp_lst_poisson |> 
+  map2(err_tbl |> 
+         filter(outcome == "continuous" & model == "poisson" & 
+                  feature_set != "baseline") |> 
+         pull(id),
+       \(pp, idx) {err_tbl |> filter(id == idx) |> bind_cols(contrast_perf(pp))}) |> 
+  list_rbind() |> 
+  arrange(desc(median)) |> 
+  print_kbl()
+
+pp_lst_normal |> 
+  map2(err_tbl |> 
+         filter(outcome == "continuous" & model == "normal" & 
+                  feature_set != "baseline") |> 
+         pull(id),
+       \(pp, idx) {err_tbl |> filter(id == idx) |> bind_cols(contrast_perf(pp))}) |> 
+  list_rbind() |> 
+  arrange(desc(median)) |>
+  print_kbl()
+
+pp_lst_binary |> 
+  map2(err_tbl |> 
+         filter(str_detect(outcome, "binary") & model == "logistic" & 
+                  feature_set != "baseline") |> 
+         pull(id),
+       \(pp, idx) {err_tbl |> filter(id == idx) |> bind_cols(contrast_perf(pp))}) |> 
+  list_rbind() |> 
+  arrange(desc(median)) |>
+  print_kbl()
+```

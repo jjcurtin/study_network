@@ -1,0 +1,71 @@
+---
+title: "EDA on Baseline Features"
+author: "Coco Yu"
+date: "`r lubridate::today()`"
+format:
+  html:
+    toc: true 
+    toc_depth: 4
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+### Setup
+
+Chunk Defaults
+```{r}
+knitr::opts_chunk$set(attr.output='style="max-height: 500px;"')
+
+library(tidyverse)
+library(tidymodels)
+options(conflicts.policy = "depends.ok")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_ml.R?raw=true")
+
+library(kableExtra, exclude = "group_rows")
+library(lubridate)
+library(janitor, include.only = c("tabyl", "clean_names"))
+library(Matrix, exclude = c("expand", "pack", "unpack"))
+library(poissonreg)
+
+theme_set(theme_classic()) 
+```
+
+Absolute Paths 
+```{r}
+source("https://github.com/jjcurtin/lab_support/blob/main/format_path.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_eda.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_plots.R?raw=true")
+source("_lib/run_models.R")
+source("_lib/update_results.R")
+source("_lib/check_models.R")
+
+# path_shared <- format_path(str_c("risk/data_processed/shared"))
+path_network <- format_path(str_c("risk/data_processed/network"))
+```
+
+### Read in Data
+
+```{r}
+baseline <- read_csv(here::here(path_network, "features_baseline.csv")) |> 
+  mutate(across(where(is.character), as.factor)) |> 
+  glimpse()
+```
+
+### EDA
+
+```{r}
+baseline |> 
+  select(where(is.factor)) |>
+  names() |>
+  map(\(name) plot_bar(df = baseline, x = name)) |>
+  cowplot::plot_grid(plotlist = _, ncol = 2)
+```
+
+```{r}
+baseline |> 
+  select(where(is.numeric), -subid) |>
+  names() |> 
+  map(\(name) plot_box_violin(df = baseline, x = name)) |> 
+  cowplot::plot_grid(plotlist = _, ncol = 2)
+```
