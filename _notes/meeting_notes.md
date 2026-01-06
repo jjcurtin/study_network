@@ -13,10 +13,12 @@
 - tune random forest
 - find a package to do shap on random forest
 
-fit models without baseline and demographics
-switch to median from mean
-baseline model: only demographics
-counts of calls/messages (separate features)
+**12/19/2025**
+
+- fit models without baseline and demographics
+- switch to median from mean
+- baseline model: only demographics
+- counts of calls/messages (separate features)
     - three different configuration: counts of calls, durations of calls, counts of messages -> tune on counts, proportions, combined
     - one model for counts/proportions of important people
     - do not add contacts

@@ -1,3 +1,19 @@
+best_metrics <- function(fits){
+  metrics <- collect_metrics(fits, summarize = FALSE) |>
+    mutate(.estimate = if_else(is.na(.estimate), 0, .estimate)) |>
+    select(-id, -id2) |>
+    group_by(.config) |>
+    summarize(
+      median = median(.estimate, na.rm = TRUE),
+      se = sd(.estimate, na.rm = TRUE) / sqrt(n())
+    ) |> 
+    arrange(desc(median)) |>
+    dplyr::slice(1) |> 
+    left_join(collect_metrics(fits))
+
+  return(metrics)
+}
+
 run_glmnet <- function(data, outcome, model, feature_set, 
                        grid_glmnet = expand_grid(penalty = exp(seq(-9, 3,
                                                   length.out = 500)),
@@ -42,10 +58,8 @@ run_glmnet <- function(data, outcome, model, feature_set,
                   metrics = metric_set(rsq))
       
       best_model <-
-        poisson_reg(penalty = select_best(fits_glmnet, 
-                                          metric = "rsq")$penalty, 
-                    mixture = select_best(fits_glmnet, 
-                                          metric = "rsq")$mixture) |>
+        poisson_reg(penalty = best_metrics(fits_glmnet)$penalty, 
+                    mixture = best_metrics(fits_glmnet)$mixture) |>
         set_engine("glmnet") |> 
         fit(lapse ~ ., data = rec |> prep(data) |> bake(new_data = NULL))
 
@@ -58,10 +72,8 @@ run_glmnet <- function(data, outcome, model, feature_set,
                   metrics = metric_set(rsq))
       
       best_model <-
-        linear_reg(penalty = select_best(fits_glmnet, 
-                                          metric = "rsq")$penalty, 
-                    mixture = select_best(fits_glmnet, 
-                                          metric = "rsq")$mixture) |>
+        linear_reg(penalty = best_metrics(fits_glmnet)$penalty, 
+                    mixture = best_metrics(fits_glmnet)$mixture) |>
         set_engine("glmnet") |> 
         fit(lapse ~ ., data = rec |> prep(data) |> bake(new_data = NULL))
 
@@ -74,8 +86,8 @@ run_glmnet <- function(data, outcome, model, feature_set,
       outcome = outcome,
       model = model,
       feature_set = feature_set,
-      rsq_mean = show_best(fits_glmnet, n = 1, metric = "rsq")$mean,
-      rsq_sd = show_best(fits_glmnet, n = 1, metric = "rsq")$std_err
+      rsq_median = best_metrics(fits_glmnet)$median,
+      rsq_sd = best_metrics(fits_glmnet)$std_err
     )
 
   
@@ -102,8 +114,8 @@ run_glmnet <- function(data, outcome, model, feature_set,
     # fit best model
     best_model <- 
       logistic_reg(
-        penalty = select_best(fits_glmnet, metric = "roc_auc")$penalty, 
-        mixture = select_best(fits_glmnet, metric = "roc_auc")$mixture
+        penalty = best_metrics(fits_glmnet)$penalty, 
+        mixture = best_metrics(fits_glmnet)$mixture
       ) |>
       set_engine("glmnet", maxit = 1000000) |> 
       fit(lapse ~ ., data = rec |> prep(data) |> bake(new_data = NULL))
@@ -112,8 +124,8 @@ run_glmnet <- function(data, outcome, model, feature_set,
       algorithm = "glmnet",
       outcome = outcome,
       model = model, feature_set = feature_set,
-      roc_auc_trn = show_best(fits_glmnet, n = 1, metric = "roc_auc")$mean,
-      roc_auc_sd = show_best(fits_glmnet, n = 1, metric = "roc_auc")$std_err
+      roc_auc_median = best_metrics(fits_glmnet)$median,
+      roc_auc_sd = best_metrics(fits_glmnet)$std_err
     )
 
   } else {
@@ -171,12 +183,9 @@ run_xgboost <- function(data, outcome, model, feature_set,
                   metrics = metric_set(rsq))
       
       best_model <- 
-        boost_tree(learn_rate = select_best(fits_xgboost, 
-                                          metric = "rsq")$learn_rate, 
-                  mtry = select_best(fits_xgboost, 
-                                        metric = "rsq")$mtry,
-                  tree_depth = select_best(fits_xgboost,
-                                          metric = "rsq")$tree_depth) |>
+        boost_tree(learn_rate = best_metrics(fits_xgboost)$learn_rate, 
+                  mtry = best_metrics(fits_xgboost)$mtry,
+                  tree_depth = best_metrics(fits_xgboost)$tree_depth) |>
         set_engine("xgboost", objective = "count:poisson") |> 
         set_mode("regression") |>
         fit(lapse ~ ., data = rec |> prep(data) |> bake(new_data = NULL))
@@ -192,12 +201,9 @@ run_xgboost <- function(data, outcome, model, feature_set,
                   metrics = metric_set(rsq))
       
       best_model <-
-        boost_tree(learn_rate = select_best(fits_xgboost,
-                                            metric = "rsq")$learn_rate,
-                   mtry = select_best(fits_xgboost,
-                                         metric = "rsq")$mtry,
-                   tree_depth = select_best(fits_xgboost,
-                                           metric = "rsq")$tree_depth) |>
+        boost_tree(learn_rate = best_metrics(fits_xgboost)$learn_rate,
+                   mtry = best_metrics(fits_xgboost)$mtry,
+                   tree_depth = best_metrics(fits_xgboost)$tree_depth) |>
         set_engine("xgboost", objective = "reg:squarederror") |> 
         set_mode("regression") |>
         fit(lapse ~ ., data = rec |> prep(data) |> bake(new_data = NULL))
@@ -212,8 +218,8 @@ run_xgboost <- function(data, outcome, model, feature_set,
       outcome = outcome,
       model = model,
       feature_set = feature_set,
-      rsq_mean = show_best(fits_xgboost, n = 1, metric = "rsq")$mean,
-      rsq_sd = show_best(fits_xgboost, n = 1, metric = "rsq")$std_err
+      rsq_median = best_metrics(fits_xgboost)$median,
+      rsq_sd = best_metrics(fits_xgboost)$std_err
     )
 
   
@@ -240,9 +246,9 @@ run_xgboost <- function(data, outcome, model, feature_set,
     # fit best model
     best_model <- 
       boost_tree(
-        learn_rate = select_best(fits_xgboost, metric = "roc_auc")$learn_rate,
-        mtry = select_best(fits_xgboost, metric = "roc_auc")$mtry,
-        tree_depth = select_best(fits_xgboost, metric = "roc_auc")$tree_depth
+        learn_rate = best_metrics(fits_xgboost)$learn_rate,
+        mtry = best_metrics(fits_xgboost)$mtry,
+        tree_depth = best_metrics(fits_xgboost)$tree_depth
       ) |>
       set_engine("xgboost", objective = "binary:logistic") |> 
       set_mode("classification") |>
@@ -252,8 +258,8 @@ run_xgboost <- function(data, outcome, model, feature_set,
       algorithm = "xgboost",
       outcome = outcome,
       model = model, feature_set = feature_set,
-      roc_auc_trn = show_best(fits_xgboost, n = 1, metric = "roc_auc")$mean,
-      roc_auc_sd = show_best(fits_xgboost, n = 1, metric = "roc_auc")$std_err
+      roc_auc_median = best_metrics(fits_xgboost)$median,
+      roc_auc_sd = best_metrics(fits_xgboost)$std_err
     )
 
   } else {
@@ -315,9 +321,9 @@ run_rf <- function(
       )
     
     best_model <- rand_forest(
-      mtry = select_best(fits_rf, metric = "rsq")$mtry,
-      min_n = select_best(fits_rf, metric = "rsq")$min_n,
-      trees = select_best(fits_rf, metric = "rsq")$trees
+      mtry = best_metrics(fits_rf)$mtry,
+      min_n = best_metrics(fits_rf)$min_n,
+      trees = best_metrics(fits_rf)$trees
     ) |>
       set_engine("ranger", importance = "impurity") |>
       set_mode("regression") |>
@@ -328,8 +334,8 @@ run_rf <- function(
       outcome = outcome,
       model = model,
       feature_set = feature_set,
-      rsq_mean = show_best(fits_rf, n = 1, metric = "rsq")$mean,
-      rsq_sd   = show_best(fits_rf, n = 1, metric = "rsq")$std_err
+      rsq_median = best_metrics(fits_rf)$median,
+      rsq_sd   = best_metrics(fits_rf)$std_err
     )
 
   } else if (str_detect(outcome, "binary")) {
@@ -358,9 +364,9 @@ run_rf <- function(
       )
 
     best_model <- rand_forest(
-      mtry = select_best(fits_rf, metric = "roc_auc")$mtry,
-      min_n = select_best(fits_rf, metric = "roc_auc")$min_n,
-      trees = select_best(fits_rf, metric = "roc_auc")$trees
+      mtry = best_metrics(fits_rf)$mtry,
+      min_n = best_metrics(fits_rf)$min_n,
+      trees = best_metrics(fits_rf)$trees
     ) |>
       set_engine("ranger", importance = "impurity", probability = TRUE) |>
       set_mode("classification") |>
@@ -371,8 +377,8 @@ run_rf <- function(
       outcome = outcome,
       model = model,
       feature_set = feature_set,
-      roc_auc_mean = show_best(fits_rf, n = 1, metric = "roc_auc")$mean,
-      roc_auc_sd   = show_best(fits_rf, n = 1, metric = "roc_auc")$std_err
+      roc_auc_median = best_metrics(fits_rf)$median,
+      roc_auc_sd   = best_metrics(fits_rf)$std_err
     )
 
   } else {
