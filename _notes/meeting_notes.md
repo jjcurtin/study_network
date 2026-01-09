@@ -24,3 +24,10 @@
     - do not add contacts
     - do not add demo/id
 - look into gaussian/poisson for xgboost
+
+
+**1/6/2026**
+- look at feature importance -- parameter estimates & shapley 
+- figure out auroc < .5
+- bayesian comparison
+- check hyperparameter tuning

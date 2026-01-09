@@ -48,12 +48,12 @@ path_models <- format_path(str_c("risk/models/network"))
 ### Read in Data
 
 ```{r}
-fits_glmnet <- read_rds(here::here(path_models, "fits_lst_v2.rds"))
-err_tbl_glmnet <- read_csv("_results/err_tbl_v2.csv")
-fits_xgboost <- read_rds(here::here(path_models, "fits_lst_v3.rds"))
-err_tbl_xgboost <- read_csv("_results/err_tbl_v3.csv")
-fits_rf <- read_rds(here::here(path_models, "fits_lst_v4.rds"))
-err_tbl_rf <- read_csv("_results/err_tbl_v4.csv")
+fits_glmnet <- read_rds(here::here(path_models, "fits_lst_glmnet_v1.rds"))
+err_tbl_glmnet <- read_csv("_results/err_tbl_glmnet_v1.csv")
+fits_xgboost <- read_rds(here::here(path_models, "fits_lst_xgboost_v1.rds"))
+err_tbl_xgboost <- read_csv("_results/err_tbl_xgboost_v1.csv")
+fits_rf <- read_rds(here::here(path_models, "fits_lst_rf_v1.rds"))
+err_tbl_rf <- read_csv("_results/err_tbl_rf_v1.csv")
 ```
 
 ```{r}
@@ -85,7 +85,7 @@ data_binary <- features_v3 |>
 ```{r}
 err_tbl <- err_tbl_glmnet |> 
   bind_rows(err_tbl_xgboost) |> 
-	mutate(id = 1:nrow(err_tbl))
+  bind_rows(err_tbl_rf)
 
 fits <- c(fits_glmnet, fits_xgboost)
 ```
