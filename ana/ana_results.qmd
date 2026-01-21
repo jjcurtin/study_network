@@ -50,34 +50,16 @@ path_models <- format_path(str_c("risk/models/network"))
 ```{r}
 fits_glmnet <- read_rds(here::here(path_models, "fits_lst_glmnet_v1.rds"))
 err_tbl_glmnet <- read_csv("_results/err_tbl_glmnet_v1.csv")
+best_glmnet <- read_rds(here::here(path_models, "best_models_glmnet_v1.rds"))
 fits_xgboost <- read_rds(here::here(path_models, "fits_lst_xgboost_v1.rds"))
 err_tbl_xgboost <- read_csv("_results/err_tbl_xgboost_v1.csv")
+best_xgboost <- read_rds(here::here(path_models, "best_models_xgboost_v1.rds"))
 fits_rf <- read_rds(here::here(path_models, "fits_lst_rf_v1.rds"))
 err_tbl_rf <- read_csv("_results/err_tbl_rf_v1.csv")
-```
+best_rf <- read_rds(here::here(path_models, "best_models_rf_v1.rds"))
 
-```{r}
-features_v3 <- read_csv(here::here(path_network, "features_network_v3.csv"))
-baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
 labels <- read_csv(here::here(path_network, "labels.csv"))
-
-data_continuous <- features_v3 |> 
-  left_join(labels, by = "subid") |>
-  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
-  left_join(baseline, by = "subid") |>
-  select(-n_lapse, -day_on_study, -subid) |>
-	mutate(across(where(is.character), as.factor),
-           across(where(is.factor), ~ factor(.x, levels = levels(.x)))) |> 
-  glimpse()
-
-data_binary <- features_v3 |> 
-  left_join(labels, by = "subid") |> 
-  mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
-  left_join(baseline, by = "subid") |>
-  select(-subid, -n_lapse, -day_on_study) |> 
-	mutate(across(where(is.character), as.factor),
-           across(where(is.factor), ~ factor(.x, levels = levels(.x))))
-  glimpse()
+features_baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
 ```
 
 **Combine and clean up results**
@@ -85,9 +67,11 @@ data_binary <- features_v3 |>
 ```{r}
 err_tbl <- err_tbl_glmnet |> 
   bind_rows(err_tbl_xgboost) |> 
-  bind_rows(err_tbl_rf)
+  bind_rows(err_tbl_rf) |> 
+  mutate(id = row_number())
 
-fits <- c(fits_glmnet, fits_xgboost)
+fits <- c(fits_glmnet, fits_xgboost, fits_rf)
+best_models <- c(best_glmnet, best_xgboost, best_rf)
 ```
 
 ### Bayesian Comparison
@@ -96,15 +80,15 @@ fits <- c(fits_glmnet, fits_xgboost)
 
 ```{r}
 id_continuous_baseline <- err_tbl |> 
-  filter(outcome == "continuous" & feature_set == "baseline") |> 
-	arrange(desc(rsq_mean)) |> 
+  filter(outcome == "continuous" & str_detect(feature_version, "baseline")) |> 
+	arrange(desc(rsq_median)) |> 
 	slice_head(n = 1) |> 
 	pull(id) |> 
 	as.numeric()
 
 id_continuous_full <- err_tbl |> 
-	filter(outcome == "continuous" & feature_set != "baseline") |> 
-	arrange(desc(rsq_mean)) |> 
+	filter(outcome == "continuous" & str_detect(feature_version, "full")) |> 
+	arrange(desc(rsq_median)) |> 
 	slice_head(n = 1) |> 
 	pull(id) |> 
 	as.numeric()
@@ -129,15 +113,17 @@ contrast_perf(pp_continuous)
 
 ```{r}
 id_binary_baseline <- err_tbl |> 
-  filter(str_detect(outcome, "binary") & feature_set == "baseline") |> 
-	arrange(desc(roc_auc_trn)) |> 
+  filter(str_detect(outcome, "binary") & 
+           str_detect(feature_version, "baseline")) |> 
+	arrange(desc(roc_auc_median)) |> 
 	slice_head(n = 1) |> 
 	pull(id) |> 
 	as.numeric()
 
 id_binary_full <- err_tbl |> 
-	filter(str_detect(outcome, "binary") & feature_set != "baseline") |> 
-	arrange(desc(roc_auc_trn)) |> 
+	filter(str_detect(outcome, "binary") & 
+	         str_detect(feature_version, "full")) |> 
+	arrange(desc(roc_auc_median)) |> 
 	slice_head(n = 1) |> 
 	pull(id) |> 
 	as.numeric()
@@ -163,54 +149,32 @@ contrast_perf(pp_binary)
 ### Continuous
 
 ```{r}
+err_tbl |> slice(id_continuous_full) |> print_kbl()
+data_continuous <- read_csv(here::here(path_network, 
+                                       "features_network_v4.csv")) |> 
+  left_join(labels, by = "subid") |>
+            mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
+            left_join(features_baseline |> select(subid, starts_with("demo")), 
+                      by = "subid") |>
+            select(-n_lapse, -day_on_study, -subid) |> 
+  glimpse()
+
 rec <- recipe(lapse ~ ., data = data_continuous) |> 
-      step_select(-starts_with("prop_")) |> 
+      step_select(-starts_with("n_")) |> 
       step_impute_median(all_numeric_predictors()) |> 
       step_impute_mode(all_nominal_predictors()) |>
-      step_dummy(all_nominal_predictors()) |>
+      step_dummy(all_nominal_predictors()) |> 
       step_zv(all_predictors()) |> 
-      step_nzv(all_predictors())
+      step_nzv(all_predictors()) |>
+      step_normalize(all_numeric_predictors())
 
 feat <- rec |> prep(data_continuous) |> bake(new_data = NULL)
 
-best_model_continuous <-
-  boost_tree(learn_rate = select_best(fits[[id_continuous_full]],
-                                      metric = "rsq")$learn_rate,
-             mtry = select_best(fits[[id_continuous_full]],
-                                metric = "rsq")$mtry,
-             tree_depth = select_best(fits[[id_continuous_full]],
-                                      metric = "rsq")$tree_depth) |>
-  set_engine("xgboost", objective = "reg:squarederror") |> 
-  set_mode("regression") |>
-  fit(lapse ~ ., data = feat)
-```
-
-```{r}
-shaps <- SHAPforxgboost::shap.prep(xgb_model = 
-                                   extract_fit_engine(best_model_continuous),
-                     X_train = feat |> select(-lapse) |>  as.matrix())
-
-shaps |>
-  group_by(variable) |>
-  summarise(
-    mean_abs_shap = mean(abs(value), na.rm = TRUE),
-    .groups = "drop"
-  ) |>
-  arrange(desc(mean_abs_shap))
-
-shaps |>
-  group_by(variable) |>
-  summarise(
-    mean_abs_shap = mean(abs(value), na.rm = TRUE),
-    .groups = "drop"
-  ) |>
-  arrange(desc(mean_abs_shap)) |> 
-	mutate(variable_name = factor(variable),
-         variable_name = fct_reorder(variable_name, mean_abs_shap)) |>
-  ggplot(aes(x = variable_name, y = mean_abs_shap)) +
-  geom_point() +
-  coord_flip()
-
+best_model_continuous <- best_models[[id_continuous_full]]
+best_model_continuous |> 
+  tidy() |> 
+  arrange(desc(abs(estimate))) |>
+  print_kbl()
 ```
 
 ```{r}
@@ -234,7 +198,8 @@ explain_full <- explain_tidymodels(best_model_continuous,
                                    y = data_continuous$lapse, 
                                    predict_function = predict_wrapper)
 
-shap_2 <- feat |>
+local_shap_continuous <- feat |>
+  select(-lapse) |> 
   slice_sample(prop = 1/5) |>
   mutate(id = row_number()) |>
   nest(.by = id, .key = "dfs") |> 
@@ -242,11 +207,31 @@ shap_2 <- feat |>
   select(-dfs) |>
   unnest(shaps)
 
+local_shap_continuous |>
+  mutate(contribution = abs(contribution)) |>
+  group_by(variable_name) |>
+  summarize(mean_shap = mean(contribution)) |>
+  arrange(desc(mean_shap)) |>
+  mutate(variable_name = factor(variable_name),
+         variable_name = fct_reorder(variable_name, mean_shap)) |>
+  ggplot(aes(x = variable_name, y = mean_shap)) +
+  geom_point() +
+  coord_flip()
+
 ```
 
 ### Binary
 
 ```{r}
+err_tbl |> slice(id_binary_full) |> print_kbl()
+data_binary <- read_csv(here::here(path_network, 
+                                       "features_network_v3.csv")) |>
+  left_join(labels, by = "subid") |> 
+            mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |> 
+            left_join(features_baseline |> select(subid, starts_with("demo")), 
+                      by = "subid") |>
+            select(-n_lapse, -day_on_study, -subid)
+
 rec <- recipe(lapse ~ ., data = data_binary) |> 
       step_select(-starts_with("n_")) |> 
       step_impute_median(all_numeric_predictors()) |> 
@@ -257,16 +242,47 @@ rec <- recipe(lapse ~ ., data = data_binary) |>
       step_nzv(all_predictors()) |>
       step_normalize(all_numeric_predictors())
 
-best_model_binary <-
-  logistic_reg(penalty = select_best(fits[[id_binary_full]],
-	                                 metric = "roc_auc")$penalty, 
-             mixture = select_best(fits[[id_binary_full]], 
-                                   metric = "roc_auc")$mixture) |>
-  set_engine("glmnet") |> 
-  fit(lapse ~ ., data = rec |> prep(data_binary) |> bake(new_data = NULL))
+feat <- rec |> prep(data_binary) |> bake(new_data = NULL)
 
+best_model_binary <- best_models[[id_binary_full]]
 best_model_binary |> 
   tidy() |> 
-	arrange(desc(abs(estimate))) |>
-	print_kbl()
+  arrange(desc(abs(estimate))) |>
+  print_kbl()
 ```
+
+```{r}
+predict_wrapper <- function(model, newdata) {
+  predict(model, newdata, type = "prob") |> 
+    pull(.pred_yes)
+}
+explain_full <- explain_tidymodels(best_model_binary,  
+                                   data = feat, 
+                                   y = data_binary$lapse, 
+                                   predict_function = predict_wrapper)
+
+local_shap_binary <- feat |>
+  select(-lapse) |>
+  slice_sample(prop = 1/5) |>
+  mutate(id = row_number()) |>
+  nest(.by = id, .key = "dfs") |> 
+  mutate(shaps = map(dfs, \(df1) get_shaps(df1))) |> 
+  select(-dfs) |>
+  unnest(shaps)
+
+local_shap_binary |>
+  mutate(contribution = abs(contribution)) |>
+  group_by(variable_name) |>
+  summarize(mean_shap = mean(contribution)) |>
+  arrange(desc(mean_shap)) |>
+  mutate(variable_name = factor(variable_name),
+         variable_name = fct_reorder(variable_name, mean_shap)) |>
+  ggplot(aes(x = variable_name, y = mean_shap)) +
+  geom_point() +
+  coord_flip()
+```
+
+```{r}
+
+```
+

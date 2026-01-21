@@ -1,5 +1,5 @@
 ---
-title: "Random Forest Models"
+title: "GLMNET Models"
 author: "Coco Yu"
 date: "`r lubridate::today()`"
 format:
@@ -48,56 +48,22 @@ path_models <- format_path(str_c("risk/models/network"))
 ### Read in Data
 
 ```{r}
-features_v1 <- read_csv(here::here(path_network, "features_network_v1.csv"))
-features_v2 <- read_csv(here::here(path_network, "features_network_v2.csv"))
-features_v3 <- read_csv(here::here(path_network, "features_network_v3.csv"))
-features_v4 <- read_csv(here::here(path_network, "features_network_v4.csv"))
+features_msgs <- read_csv(here::here(path_network, "features_network_v5.csv"))
 labels <- read_csv(here::here(path_network, "labels.csv"))
 baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
 ```
 
 ```{r}
-features <- list(features_v1, features_v2, features_v3, features_v4)
+features <- list(features_msgs)
 feature_versions <- c(
-                   "features_contact_v1", "features_contact_v2", 
-                   "features_contact_v3", "features_contact_v4",
-                   "features_full_v1", "features_full_v2", 
-                   "features_full_v3", "features_full_v4")
+                   "features_msgs", 
+                   "features_full")
 
 configs <- tibble()
 ```
 
-**Baseline**
 
-```{r}
-configs <- configs |> bind_rows(expand.grid(
-  data_lst = list(baseline |> 
-    select(subid, starts_with("demo")) |> 
-    left_join(labels, by = "subid") |>
-    mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
-    select(-n_lapse, -day_on_study, -subid) |>
-    glimpse()),
-  feature_versions = "features_baseline",
-  outcome_lst = "continuous",
-  model_lst = c("poisson", "normal"),
-  feature_lst = "baseline"
-))
-
-configs <- configs |> bind_rows(expand.grid(
-  data_lst = list(baseline |> 
-    select(subid, starts_with("demo")) |> 
-    left_join(labels, by = "subid") |>
-    mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |> 
-    select(-n_lapse, -day_on_study, -subid) |>
-    glimpse()),
-  feature_versions = "features_baseline",
-  outcome_lst = "binary",
-  model_lst = "logistic",
-  feature_lst = "baseline"
-))
-```
-
-**Contact Features**
+**Message Features**
 ```{r}
 configs <- configs |> bind_rows(
   tibble(
@@ -107,7 +73,7 @@ configs <- configs |> bind_rows(
             left_join(labels, by = "subid") |>
             mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[1:4],
+    feature_versions = feature_versions[1],
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
@@ -121,7 +87,7 @@ configs <- configs |> bind_rows(
             left_join(labels, by = "subid") |>
             mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[1:4],
+    feature_versions = feature_versions[1],
     outcome_lst = "binary"
   ) |> expand_grid(
     model_lst = "logistic",
@@ -143,7 +109,7 @@ configs <- configs |> bind_rows(
             left_join(baseline |> select(subid, starts_with("demo")), 
                       by = "subid") |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[5:8],
+    feature_versions = feature_versions[2],
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
@@ -159,7 +125,7 @@ configs <- configs |> bind_rows(
             left_join(baseline |> select(subid, starts_with("demo")), 
                       by = "subid") |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[5:8],
+    feature_versions = feature_versions[2],
     outcome_lst = "binary"
   ) |> expand_grid(
     model_lst = "logistic",
@@ -181,7 +147,7 @@ map(
   1:nrow(configs),
   \(i)
   update_results(
-    run_rf(
+    run_glmnet(
       data = configs$data_lst[[i]],
       outcome = configs$outcome_lst[[i]],
       model = configs$model_lst[[i]],
@@ -195,25 +161,13 @@ map(
 
 ```{r}
 err_tbl |>
-  write_csv("_results/err_tbl_rf_v1.csv")
+  write_csv("_results/err_tbl_glmnet_v2.csv")
 
 fits_lst |>
-  write_rds(here::here(path_models, "fits_lst_rf_v1.rds"))
+  write_rds(here::here(path_models, "fits_lst_glmnet_v2.rds"))
 
 best_models |> 
-  write_rds(here::here(path_models, "best_models_rf_v1.rds"))
+  write_rds(here::here(path_models, "best_models_glmnet_v2.rds"))
 ```
 
-```{r}
-1:3 |> 
-  map(
-    \(i)
-    plot_hyperparameters(fits_lst[[i]], hp1 = "min_n", hp2 = "mtry",
-                         metric = "rsq")
-  ) |> 
-  cowplot::plot_grid(plotlist = _, ncol = 3)
-
-plot_hyperparameters(fits_lst[[3]], hp1 = "min_n", hp2 = "mtry",
-                         metric = "rsq")
-```
 
