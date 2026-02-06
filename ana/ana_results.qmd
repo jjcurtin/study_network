@@ -60,6 +60,13 @@ best_rf <- read_rds(here::here(path_models, "best_models_rf_v1.rds"))
 
 labels <- read_csv(here::here(path_network, "labels.csv"))
 features_baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
+
+fits_glmnet_v2 <- read_rds(here::here(path_models, "fits_lst_glmnet_v2.rds"))
+err_tbl_glmnet_v2 <- read_csv("_results/err_tbl_glmnet_v2.csv")
+best_glmnet_v2 <- read_rds(here::here(path_models, "best_models_glmnet_v2.rds"))
+fits_glmnet_v3 <- read_rds(here::here(path_models, "fits_lst_glmnet_v3.rds"))
+err_tbl_glmnet_v3 <- read_csv("_results/err_tbl_glmnet_v3.csv")
+best_glmnet_v3 <- read_rds(here::here(path_models, "best_models_glmnet_v3.rds"))
 ```
 
 **Combine and clean up results**
@@ -72,6 +79,12 @@ err_tbl <- err_tbl_glmnet |>
 
 fits <- c(fits_glmnet, fits_xgboost, fits_rf)
 best_models <- c(best_glmnet, best_xgboost, best_rf)
+
+err_tbl_msgs <- err_tbl_glmnet_v2 |> 
+  bind_rows(err_tbl_glmnet_v3) |> 
+  mutate(id = row_number())
+fits_msgs <- c(fits_glmnet_v2, fits_glmnet_v3)
+best_msgs <- c(best_glmnet_v2, best_glmnet_v3)
 ```
 
 ### Bayesian Comparison
@@ -87,7 +100,7 @@ id_continuous_baseline <- err_tbl |>
 	as.numeric()
 
 id_continuous_full <- err_tbl |> 
-	filter(outcome == "continuous" & str_detect(feature_version, "full")) |> 
+	filter(outcome == "continuous" & !str_detect(feature_version, "baseline")) |> 
 	arrange(desc(rsq_median)) |> 
 	slice_head(n = 1) |> 
 	pull(id) |> 
@@ -122,7 +135,7 @@ id_binary_baseline <- err_tbl |>
 
 id_binary_full <- err_tbl |> 
 	filter(str_detect(outcome, "binary") & 
-	         str_detect(feature_version, "full")) |> 
+	         !str_detect(feature_version, "baseline")) |> 
 	arrange(desc(roc_auc_median)) |> 
 	slice_head(n = 1) |> 
 	pull(id) |> 
@@ -151,11 +164,9 @@ contrast_perf(pp_binary)
 ```{r}
 err_tbl |> slice(id_continuous_full) |> print_kbl()
 data_continuous <- read_csv(here::here(path_network, 
-                                       "features_network_v4.csv")) |> 
+                                       "features_network_v3.csv")) |> 
   left_join(labels, by = "subid") |>
-            mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |> 
-            left_join(features_baseline |> select(subid, starts_with("demo")), 
-                      by = "subid") |>
+            mutate(lapse = as.integer(n_lapse / day_on_study * 91))|>
             select(-n_lapse, -day_on_study, -subid) |> 
   glimpse()
 
@@ -200,12 +211,30 @@ explain_full <- explain_tidymodels(best_model_continuous,
 
 local_shap_continuous <- feat |>
   select(-lapse) |> 
-  slice_sample(prop = 1/5) |>
+  # slice_sample(prop = 1/5) |>
   mutate(id = row_number()) |>
   nest(.by = id, .key = "dfs") |> 
   mutate(shaps = map(dfs, \(df1) get_shaps(df1))) |> 
   select(-dfs) |>
   unnest(shaps)
+```
+
+```{r}
+local_shap_continuous <- local_shap_continuous |> 
+  mutate(variable_name = case_when(
+    str_detect(variable_name, "demo_educ") ~ "demo_education",
+    str_detect(variable_name, "demo_marital") ~ "demo_marital_status",
+    str_detect(variable_name, "demo_race") ~ "demo_race",
+    str_detect(variable_name, "demo_sex") ~ "demo_sex",
+    str_detect(variable_name, "_support") ~ "prop_social_support",
+    str_detect(variable_name, "drinker") ~ "prop_drink_status",
+    str_detect(variable_name, "drank") ~ "prop_drink_history",
+    str_detect(variable_name, "drink_future") ~ "prop_drink_presence",
+    variable_name %in% c("prop_pleasant", "prop_unpleasant", "prop_neutral",
+                         "prop_mixed_exp") ~ "prop_affect_exp",
+    variable_name == "prop_recovery" ~ "prop_know_recovery",
+    TRUE ~ variable_name
+  ))
 
 local_shap_continuous |>
   mutate(contribution = abs(contribution)) |>
@@ -228,8 +257,6 @@ data_binary <- read_csv(here::here(path_network,
                                        "features_network_v3.csv")) |>
   left_join(labels, by = "subid") |> 
             mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |> 
-            left_join(features_baseline |> select(subid, starts_with("demo")), 
-                      by = "subid") |>
             select(-n_lapse, -day_on_study, -subid)
 
 rec <- recipe(lapse ~ ., data = data_binary) |> 
@@ -263,12 +290,28 @@ explain_full <- explain_tidymodels(best_model_binary,
 
 local_shap_binary <- feat |>
   select(-lapse) |>
-  slice_sample(prop = 1/5) |>
+  # slice_sample(prop = 1/5) |>
   mutate(id = row_number()) |>
   nest(.by = id, .key = "dfs") |> 
   mutate(shaps = map(dfs, \(df1) get_shaps(df1))) |> 
   select(-dfs) |>
   unnest(shaps)
+
+local_shap_binary <- local_shap_binary |> 
+  mutate(variable_name = case_when(
+    str_detect(variable_name, "demo_educ") ~ "demo_education",
+    str_detect(variable_name, "demo_marital") ~ "demo_marital_status",
+    str_detect(variable_name, "demo_race") ~ "demo_race",
+    str_detect(variable_name, "demo_sex") ~ "demo_sex",
+    str_detect(variable_name, "_support") ~ "prop_social_support",
+    str_detect(variable_name, "drinker") ~ "prop_drink_status",
+    str_detect(variable_name, "drank") ~ "prop_drink_history",
+    str_detect(variable_name, "drink_future") ~ "prop_drink_presence",
+    variable_name %in% c("prop_pleasant", "prop_unpleasant", "prop_neutral",
+                         "prop_mixed_exp") ~ "prop_affect_exp",
+    variable_name == "prop_recovery" ~ "prop_know_recovery",
+    TRUE ~ variable_name
+  ))
 
 local_shap_binary |>
   mutate(contribution = abs(contribution)) |>
@@ -282,7 +325,102 @@ local_shap_binary |>
   coord_flip()
 ```
 
+--- delete later: msgs results---
+
 ```{r}
+id_continuous_msgs <- err_tbl_msgs |> 
+	filter(outcome == "continuous" & !str_detect(feature_version, "baseline")) |> 
+	arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+```
+
+```{r}
+data_msgs <- read_csv(here::here(path_network, 
+                                       "features_network_v5.csv")) |> 
+  left_join(read_csv(here::here(path_network, "features_network_v4.csv")), by = "subid") |>
+  left_join(labels, by = "subid") |>
+            mutate(lapse = as.integer(n_lapse / day_on_study * 91))|>
+            select(-n_lapse, -day_on_study, -subid) |> 
+  glimpse()
+
+rec <- recipe(lapse ~ ., data = data_msgs) |> 
+      step_select(-starts_with("n_")) |> 
+      step_impute_median(all_numeric_predictors()) |> 
+      step_impute_mode(all_nominal_predictors()) |>
+      step_dummy(all_nominal_predictors()) |> 
+      step_zv(all_predictors()) |> 
+      step_nzv(all_predictors()) |>
+      step_normalize(all_numeric_predictors())
+
+feat <- rec |> prep(training = data_msgs) |> bake(new_data = NULL)
+
+best_model_msgs <- best_msgs[[id_continuous_msgs]]
+best_model_msgs |> 
+  tidy() |> 
+  arrange(desc(abs(estimate))) |>
+  print_kbl()
+```
+
+```{r}
+predict_wrapper <- function(model, newdata) {
+  predict(model, newdata) |> 
+    pull(.pred)
+}
+
+get_shaps <- function(df1){
+  predict_parts(explain_full, 
+                new_observation = df1,
+                type = "shap",
+                B = 25) |> 
+    filter(B == 0) |>
+    select(variable_name, variable_value, contribution) |> 
+    as_tibble()
+}
+
+explain_full <- explain_tidymodels(best_model_msgs,  
+                                   data = feat, 
+                                   y = data_msgs$lapse, 
+                                   predict_function = predict_wrapper)
+
+local_shap_msgs <- feat |>
+  select(-lapse) |>
+  # slice_sample(prop = 1/5) |>
+  mutate(id = row_number()) |>
+  nest(.by = id, .key = "dfs") |> 
+  mutate(shaps = map(dfs, \(df1) get_shaps(df1))) |> 
+  select(-dfs) |>
+  unnest(shaps)
+```
+
+```{r}
+local_shap_msgs_rename <- local_shap_msgs |> 
+  mutate(variable_name = case_when(
+    str_detect(variable_name, "demo_educ") ~ "demo_education",
+    str_detect(variable_name, "demo_marital") ~ "demo_marital_status",
+    str_detect(variable_name, "demo_race") ~ "demo_race",
+    str_detect(variable_name, "demo_sex") ~ "demo_sex",
+    str_detect(variable_name, "_support") ~ "prop_social_support",
+    str_detect(variable_name, "drinker") ~ "prop_drink_status",
+    str_detect(variable_name, "drank") ~ "prop_drink_history",
+    str_detect(variable_name, "drink_future") ~ "prop_drink_presence",
+    variable_name %in% c("prop_pleasant", "prop_unpleasant", "prop_neutral",
+                         "prop_mixed_exp") ~ "prop_affect_exp",
+    variable_name == "prop_recovery" ~ "prop_know_recovery",
+    TRUE ~ variable_name
+  ))
+
+local_shap_msgs |>
+  mutate(contribution = abs(contribution)) |>
+  group_by(variable_name) |>
+  summarize(mean_shap = mean(contribution)) |>
+  arrange(desc(mean_shap)) |>
+  mutate(variable_name = factor(variable_name),
+         variable_name = fct_reorder(variable_name, mean_shap)) |>
+  ggplot(aes(x = variable_name, y = mean_shap)) +
+  geom_point() +
+  coord_flip()
 
 ```
 
