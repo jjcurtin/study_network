@@ -31,3 +31,21 @@
 - figure out auroc < .5
 - bayesian comparison
 - check hyperparameter tuning
+
+**1/23/2026**
+- interpretation for shaps
+    - add up into meaningful categories
+    - condex to all the context except for relationship
+- include sectionality in communication patterns
+
+**2/6/2026**
+- think about quantify & quality
+    - dimension reduction
+        - don't do --> hard to interpret
+    - more model configurations
+        - rule out by cross-validation  
+    - feature selection on most predictice from the communications and the network features -> do parallel and then combine
+        - if do feature selection, do lasso
+    - configuration on incoming, outgoing, both, neglect both
+
+do nested and look at validation sets

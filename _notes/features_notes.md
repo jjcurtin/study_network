@@ -25,4 +25,8 @@
 
 - v4: v3 features with intersections
 
+- v5: cellular communication features (w/ contacts information)
+
+- v6: v5 without workers
+
 
