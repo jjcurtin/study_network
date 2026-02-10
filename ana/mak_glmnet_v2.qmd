@@ -48,7 +48,8 @@ path_models <- format_path(str_c("risk/models/network"))
 ### Read in Data
 
 ```{r}
-features_msgs <- read_csv(here::here(path_network, "features_network_v6.csv"))
+features_msgs_v1 <- read_csv(here::here(path_network, "features_network_v5.csv"))
+features_msgs_v2 <- read_csv(here::here(path_network, "features_network_v6.csv")) 
 labels <- read_csv(here::here(path_network, "labels.csv"))
 baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
 
@@ -60,8 +61,10 @@ features_lst_contact <- list(features_v1, features_v2, features_v3, features_v4)
 ```
 
 ```{r}
-features <- list(features_msgs)
+features <- list(features_msgs_v1, features_msgs_v2)
 feature_versions <- c(
+                   "features_msgs_v1", 
+                   "features_msgs_v1_full",
                    "features_msgs_v2", 
                    "features_msgs_v2_full")
 
@@ -79,7 +82,7 @@ configs <- configs |> bind_rows(
             left_join(labels, by = "subid") |>
             mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[1],
+    feature_versions = c(feature_versions[1], feature_versions[3]),
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
@@ -93,7 +96,7 @@ configs <- configs |> bind_rows(
             left_join(labels, by = "subid") |>
             mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[1],
+    feature_versions = c(feature_versions[1], feature_versions[3]),
     outcome_lst = "binary"
   ) |> expand_grid(
     model_lst = "logistic",
@@ -115,7 +118,7 @@ configs <- configs |> bind_rows(
             left_join(baseline |> select(subid, starts_with("demo")), 
                       by = "subid") |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[2],
+    feature_versions = c(feature_versions[2], feature_versions[4]),
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
@@ -131,7 +134,7 @@ configs <- configs |> bind_rows(
             left_join(baseline |> select(subid, starts_with("demo")), 
                       by = "subid") |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[2],
+    feature_versions = c(feature_versions[2], feature_versions[4]),
     outcome_lst = "binary"
   ) |> expand_grid(
     model_lst = "logistic",
@@ -145,14 +148,16 @@ configs <- configs |> bind_rows(
 ```{r}
 configs <- configs |> bind_rows(
   tibble(
-    data_lst = features_lst_contact |> 
-      map(\(feature)
+    data_lst = rep(features_lst_contact, times = 2) |> 
+      map2(rep(features, each = 4), \(feature, feature_msgs)
           feature |> 
             left_join(labels, by = "subid") |>
-            left_join(features_msgs, by = "subid") |> 
+            left_join(feature_msgs, by = "subid") |> 
             mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c("features_msgs_v2_contact_v1", "features_msgs_v2_contact_v2",
+    feature_versions = c("features_msgs_v1_contact_v1", "features_msgs_v1_contact_v2",
+                         "features_msgs_v1_contact_v3", "features_msgs_v1_contact_v4",
+                         "features_msgs_v2_contact_v1", "features_msgs_v2_contact_v2",
                          "features_msgs_v2_contact_v3", "features_msgs_v2_contact_v4"),
     outcome_lst = "continuous"
   ) |> expand_grid(
@@ -161,14 +166,16 @@ configs <- configs |> bind_rows(
   )
 ) |> bind_rows(
   tibble(
-    data_lst = features_lst_contact |> 
-      map(\(feature)
+    data_lst = rep(features_lst_contact, times = 2) |> 
+      map2(rep(features, each = 4), \(feature, feature_msgs)
           feature |> 
             left_join(labels, by = "subid") |>
-            left_join(features_msgs, by = "subid") |> 
+            left_join(feature_msgs, by = "subid") |> 
             mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c("features_msgs_v2_contact_v1", "features_msgs_v2_contact_v2",
+    feature_versions = c("features_msgs_v1_contact_v1", "features_msgs_v1_contact_v2",
+                         "features_msgs_v1_contact_v3", "features_msgs_v1_contact_v4",
+                         "features_msgs_v2_contact_v1", "features_msgs_v2_contact_v2",
                          "features_msgs_v2_contact_v3", "features_msgs_v2_contact_v4"),
     outcome_lst = "binary"
   ) |> expand_grid(
@@ -183,19 +190,23 @@ configs <- configs |> bind_rows(
 ```{r}
 configs <- configs |> bind_rows(
   tibble(
-    data_lst = features_lst_contact |> 
-      map(\(feature)
+    data_lst = rep(features_lst_contact, times = 2) |> 
+      map2(rep(features, each = 4), \(feature, feature_msgs)
           feature |> 
             left_join(labels, by = "subid") |>
-            left_join(features_msgs, by = "subid") |> 
+            left_join(feature_msgs, by = "subid") |> 
             left_join(baseline |> select(subid, starts_with("demo")), 
                       by = "subid") |>
             mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c("features_msgs_v2_contact_full_v1",
-                         "features_msgs_v2_contact_full_v2",
-                         "features_msgs_v2_contact_full_v3", 
-                         "features_msgs_v2_contact_full_v4"),
+    feature_versions = c("features_msgs_v1_contact_v1_full",
+                         "features_msgs_v1_contact_v2_full",
+                         "features_msgs_v1_contact_v3_full", 
+                         "features_msgs_v1_contact_v4_full",
+                         "features_msgs_v2_contact_v1_full",
+                         "features_msgs_v2_contact_v2_full",
+                         "features_msgs_v2_contact_v3_full", 
+                         "features_msgs_v2_contact_v4_full"),
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
@@ -203,19 +214,23 @@ configs <- configs |> bind_rows(
   )
 ) |> bind_rows(
   tibble(
-    data_lst = features_lst_contact |> 
-      map(\(feature)
+    data_lst = rep(features_lst_contact, times = 2) |> 
+      map2(rep(features, each = 4), \(feature, feature_msgs)
           feature |> 
             left_join(labels, by = "subid") |>
-            left_join(features_msgs, by = "subid") |>
+            left_join(feature_msgs, by = "subid") |>
             left_join(baseline |> select(subid, starts_with("demo")), 
                       by = "subid") |>
             mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c("features_msgs_v2_contact_full_v1", 
-                         "features_msgs_v2_contact_full_v2",
-                         "features_msgs_v2_contact_full_v3", 
-                         "features_msgs_v2_contact_full_v4"),
+    feature_versions = c("features_msgs_v1_contact_v1_full",
+                         "features_msgs_v1_contact_v2_full",
+                         "features_msgs_v1_contact_v3_full", 
+                         "features_msgs_v1_contact_v4_full",
+                         "features_msgs_v2_contact_v1_full",
+                         "features_msgs_v2_contact_v2_full",
+                         "features_msgs_v2_contact_v3_full", 
+                         "features_msgs_v2_contact_v4_full"),
     outcome_lst = "binary"
   ) |> expand_grid(
     model_lst = "logistic",
@@ -257,13 +272,13 @@ map(
 
 ```{r}
 err_tbl |>
-  write_csv("_results/err_tbl_glmnet_v3.csv")
+  write_csv("_results/err_tbl_glmnet_v2.csv")
 
 fits_lst |>
-  write_rds(here::here(path_models, "fits_lst_glmnet_v3.rds"))
+  write_rds(here::here(path_models, "fits_lst_glmnet_v2.rds"))
 
 best_models |> 
-  write_rds(here::here(path_models, "best_models_glmnet_v3.rds"))
+  write_rds(here::here(path_models, "best_models_glmnet_v2.rds"))
 ```
 
 
