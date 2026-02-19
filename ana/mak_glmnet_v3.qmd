@@ -1,0 +1,267 @@
+---
+title: "GLMNET Models w/ nested cross validation"
+author: "Coco Yu"
+date: "`r lubridate::today()`"
+format:
+  html:
+    toc: true 
+    toc_depth: 4
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+### Notes
+
+- retained only features without workers
+
+### Setup
+
+Chunk Defaults
+```{r}
+knitr::opts_chunk$set(attr.output='style="max-height: 500px;"')
+
+library(tidyverse)
+library(tidymodels)
+options(conflicts.policy = "depends.ok")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_ml.R?raw=true")
+
+library(kableExtra, exclude = "group_rows")
+library(lubridate)
+library(janitor, include.only = c("tabyl", "clean_names"))
+library(Matrix, exclude = c("expand", "pack", "unpack"))
+library(poissonreg)
+
+theme_set(theme_classic()) 
+```
+
+Absolute Paths 
+```{r}
+source("https://github.com/jjcurtin/lab_support/blob/main/format_path.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_eda.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_plots.R?raw=true")
+source("_lib/run_models.R")
+source("_lib/update_results.R")
+source("_lib/ana_models.R")
+
+# path_shared <- format_path(str_c("risk/data_processed/shared"))
+path_network <- format_path(str_c("risk/data_processed/network"))
+path_models <- format_path(str_c("risk/models/network"))
+```
+
+use 450 folds to search for best hyperparameters
+
+```{r}
+run_glmnet_nested <- function(
+  data, model, feature_set,
+  grid_glmnet = expand_grid(
+    penalty = exp(seq(-9, 3, length.out = 500)),
+    mixture = seq(0, 1, length.out = 6)
+  ),
+  outer_v = 5, outer_repeats = 6,
+  inner_v = 5, inner_repeats = 3,
+  seed = 20200202
+){
+
+  data <- data |>
+    mutate(
+      across(where(is.character), as.factor),
+      across(where(is.factor), ~ factor(.x, levels = levels(.x)))
+    )
+
+  set.seed(seed)
+
+  # --- OUTER CV (generalization estimate) ---
+  outer_splits <- data |>
+    vfold_cv(v = outer_v, repeats = outer_repeats, strata = "lapse")
+
+  # --- RECIPE (same as yours; continuous only) ---
+  rec <- recipe(lapse ~ ., data = data)
+
+  if (str_detect(feature_set, "raw")) {
+    rec <- rec |> step_select(-starts_with("prop_"))
+  } 
+  
+  if (str_detect(feature_set, "prop")) {
+    rec <- rec |> step_select(-starts_with("n_"))
+  } 
+  
+  if (str_detect(feature_set, "incoming")){
+    rec <- rec |> step_select(-contains("outgoing"))
+  } 
+  
+  if (str_detect(feature_set, "outgoing")){
+    rec <- rec |> step_select(-contains("incoming"))
+  } 
+
+  rec <- rec |>
+    step_impute_median(all_numeric_predictors()) |>
+    step_impute_mode(all_nominal_predictors()) |>
+#     dummy code should go after step_normalize
+    # step_dummy(all_nominal_predictors()) |>
+    step_nzv(all_predictors()) |>
+    step_normalize(all_numeric_predictors())
+
+  if (model == "poisson") {
+    spec <- poisson_reg(penalty = tune(), mixture = tune()) |>
+      set_engine("glmnet", maxit = 1000000)
+  } else if (model == "normal") {
+    spec <- linear_reg(penalty = tune(), mixture = tune()) |>
+      set_engine("glmnet", maxit = 1000000)
+  } else {
+    stop("model must be 'poisson' or 'normal'")
+  }
+
+  outer_results <- outer_splits |>
+    mutate(
+      # inner resampling defined ONLY on the outer training set
+      inner_splits = map(
+        splits,
+        ~ vfold_cv(
+          analysis(.x),
+          v = inner_v,
+          repeats = inner_repeats,
+          strata = "lapse"
+        )
+      ),
+
+      # tune on inner splits (your tune_grid style)
+      fits_inner = map(
+        inner_splits,
+        ~ tune_grid(
+          spec,
+          preprocessor = rec,
+          resamples = .x,
+          grid = grid_glmnet,
+          metrics = metric_set(rsq)
+        )
+      ),
+
+      # pick best hyperparams from inner tuning
+      best_params = map(
+        fits_inner,
+        ~ select_best(.x, metric = "rsq")
+      ),
+
+      # fit best model on outer training data ONLY (same as your fit pattern)
+      best_model = map2(
+        best_params, splits,
+        ~ {
+          if (model == "poisson") {
+            poisson_reg(penalty = .x$penalty, mixture = .x$mixture) |>
+              set_engine("glmnet", maxit = 1000000) |>
+              fit(lapse ~ ., data = rec |> prep(training = analysis(.y)) |> bake(new_data = NULL))
+          } else {
+            linear_reg(penalty = .x$penalty, mixture = .x$mixture) |>
+              set_engine("glmnet", maxit = 1000000) |>
+              fit(lapse ~ ., data = rec |> prep(training = analysis(.y)) |> bake(new_data = NULL))
+          }
+        }
+      ),
+
+      # evaluate on the outer assessment set
+      outer_rsq = map2_dbl(
+        best_model, splits,
+        ~ {
+          assess <- assessment(.y)
+
+          baked_assess <- rec |> prep(training = analysis(.y)) |> bake(new_data = assess)
+
+          preds <- predict(.x, new_data = baked_assess) |>
+            bind_cols(baked_assess |> select(lapse))
+
+          rsq(preds, truth = lapse, estimate = .pred) |>
+            dplyr::pull(.estimate)
+        }
+      )
+    )
+
+
+  err_tbl <- tibble(
+    algorithm = "glmnet",
+    outcome = "continuous",
+    model = model,
+    feature_set = feature_set,
+    rsq_median = median(outer_results$outer_rsq, na.rm = TRUE),
+    rsq_iqr = IQR(outer_results$outer_rsq, na.rm = TRUE),
+    rsq_sd = sd(outer_results$outer_rsq, na.rm = TRUE)
+  )
+
+
+  return(list(err_tbl = err_tbl,
+              best_model = outer_results$best_model))
+}
+
+update_err_tbl <- function(model_results){
+  err_tbl <<- bind_rows(err_tbl, model_results$err_tbl)
+  best_models[[length(best_models) + 1]] <<- model_results$best_model
+}
+
+```
+
+### Read in Data
+
+```{r}
+feature_msgs <- read_csv(here::here(path_network, "features_network_v6.csv")) 
+labels <- read_csv(here::here(path_network, "labels.csv"))
+baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
+
+feature_contact <- read_csv(here::here(path_network, "features_network_v4.csv"))
+```
+
+```{r}
+features <- feature_contact |> 
+            left_join(labels, by = "subid") |>
+            left_join(feature_msgs, by = "subid") |> 
+            left_join(baseline |> select(subid, starts_with("demo")), 
+                      by = "subid") |>
+            mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
+            select(-n_lapse, -day_on_study, -subid)
+```
+
+### Configurations
+
+```{r}
+configs <- expand.grid(
+  model = c("poisson", "normal"),
+  feature_set = c("raw", "prop", "incoming", "outgoing",
+                  "raw_incoming", "raw_outgoing",
+                  "all")
+)
+```
+
+
+### Modeling 
+
+```{r}
+err_tbl <- tibble()
+```
+
+```{r}
+map(
+  1:nrow(configs),
+  \(i)
+  update_err_tbl(
+    run_glmnet_nested(
+      data = features,
+      model = configs$model[[i]],
+      feature_set = configs$feature_set[[i]]
+    )
+  )
+)
+
+```
+
+
+```{r}
+err_tbl |>
+  write_csv("_results/err_tbl_glmnet_v3.csv")
+
+# fits_lst |>
+#   write_rds(here::here(path_models, "fits_lst_glmnet_v3.rds"))
+# 
+# best_models |> 
+#   write_rds(here::here(path_models, "best_models_glmnet_v3.rds"))
+```
+
+
