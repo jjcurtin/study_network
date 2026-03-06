@@ -48,8 +48,8 @@ path_models <- format_path(str_c("risk/models/network"))
 ### Read in Data
 
 ```{r}
-features_msgs_v1 <- read_csv(here::here(path_network, "features_network_v5.csv"))
-features_msgs_v2 <- read_csv(here::here(path_network, "features_network_v6.csv")) 
+features_cell_v1 <- read_csv(here::here(path_network, "features_network_v5.csv"))
+features_cell_v2 <- read_csv(here::here(path_network, "features_network_v6.csv")) 
 labels <- read_csv(here::here(path_network, "labels.csv"))
 baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
 
@@ -57,22 +57,22 @@ features_v1 <- read_csv(here::here(path_network, "features_network_v1.csv"))
 features_v2 <- read_csv(here::here(path_network, "features_network_v2.csv"))
 features_v3 <- read_csv(here::here(path_network, "features_network_v3.csv"))
 features_v4 <- read_csv(here::here(path_network, "features_network_v4.csv"))
-features_lst_contact <- list(features_v1, features_v2, features_v3, features_v4)
+features_lst_network <- list(features_v1, features_v2, features_v3, features_v4)
 ```
 
 ```{r}
-features <- list(features_msgs_v1, features_msgs_v2)
+features <- list(features_cell_v1, features_cell_v2)
 feature_versions <- c(
-                   "features_msgs_v1", 
-                   "features_msgs_v1_full",
-                   "features_msgs_v2", 
-                   "features_msgs_v2_full")
+                   "features_cell_v1", 
+                   "features_cell_v1_full",
+                   "features_cell_v2", 
+                   "features_cell_v2_full")
 
 configs <- tibble()
 ```
 
 
-**Message Features**
+**Cellular Features**
 ```{r}
 configs <- configs |> bind_rows(
   tibble(
@@ -86,23 +86,29 @@ configs <- configs |> bind_rows(
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
-    feature_lst = c("raw", "prop", "all")
+    feature_lst = c("raw_incoming", "raw_outgoing", "raw_bidirectional",
+                    "prop_incoming", "prop_bidirectional",
+                    "all_incoming", "all_outgoing", "all_bidirectional")
   )
-) |> bind_rows(
-  tibble(
-    data_lst = features |> 
-      map(\(feature)
-          feature |> 
-            left_join(labels, by = "subid") |>
-            mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
-            select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c(feature_versions[1], feature_versions[3]),
-    outcome_lst = "binary"
-  ) |> expand_grid(
-    model_lst = "logistic",
-    feature_lst = c("raw", "prop", "all")
-  )
-)
+) 
+
+# configs <- configs |> bind_rows(
+#   tibble(
+#     data_lst = features |> 
+#       map(\(feature)
+#           feature |> 
+#             left_join(labels, by = "subid") |>
+#             mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
+#             select(-n_lapse, -day_on_study, -subid)),
+#     feature_versions = c(feature_versions[1], feature_versions[3]),
+#     outcome_lst = "binary"
+#   ) |> expand_grid(
+#     model_lst = "logistic",
+#     feature_lst = c("raw_incoming", "raw_outgoing", "raw_bidirectional",
+#                     "prop_incoming", "prop_bidirectional",
+#                     "all_incoming", "all_outgoing", "all_bidirectional")
+#   )
+# )
 ```
 
 **Full Features**
@@ -122,121 +128,139 @@ configs <- configs |> bind_rows(
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
-    feature_lst = c("raw", "prop", "all")
+    feature_lst = c("raw_incoming", "raw_outgoing", "raw_bidirectional",
+                    "prop_incoming", "prop_bidirectional",
+                    "all_incoming", "all_outgoing", "all_bidirectional")
   )
-) |> bind_rows(
-  tibble(
-    data_lst = features |> 
-      map(\(feature)
-          feature |> 
-            left_join(labels, by = "subid") |> 
-            mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |> 
-            left_join(baseline |> select(subid, starts_with("demo")), 
-                      by = "subid") |>
-            select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c(feature_versions[2], feature_versions[4]),
-    outcome_lst = "binary"
-  ) |> expand_grid(
-    model_lst = "logistic",
-    feature_lst = c("raw", "prop", "all")
-  )
-)
+) 
+
+# configs <- configs |> bind_rows(
+#   tibble(
+#     data_lst = features |> 
+#       map(\(feature)
+#           feature |> 
+#             left_join(labels, by = "subid") |> 
+#             mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |> 
+#             left_join(baseline |> select(subid, starts_with("demo")), 
+#                       by = "subid") |>
+#             select(-n_lapse, -day_on_study, -subid)),
+#     feature_versions = c(feature_versions[2], feature_versions[4]),
+#     outcome_lst = "binary"
+#   ) |> expand_grid(
+#     model_lst = "logistic",
+#     feature_lst = c("raw_incoming", "raw_outgoing", "raw_bidirectional",
+#                     "prop_incoming", "prop_bidirectional",
+#                     "all_incoming", "all_outgoing", "all_bidirectional")
+#   )
+# )
 ```
 
-**w/ contact features**
+**w/ network features**
 
 ```{r}
 configs <- configs |> bind_rows(
   tibble(
-    data_lst = rep(features_lst_contact, times = 2) |> 
-      map2(rep(features, each = 4), \(feature, feature_msgs)
+    data_lst = rep(features_lst_network, times = 2) |> 
+      map2(rep(features, each = 4), \(feature, feature_cell)
           feature |> 
             left_join(labels, by = "subid") |>
-            left_join(feature_msgs, by = "subid") |> 
+            left_join(feature_cell, by = "subid") |> 
             mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c("features_msgs_v1_contact_v1", "features_msgs_v1_contact_v2",
-                         "features_msgs_v1_contact_v3", "features_msgs_v1_contact_v4",
-                         "features_msgs_v2_contact_v1", "features_msgs_v2_contact_v2",
-                         "features_msgs_v2_contact_v3", "features_msgs_v2_contact_v4"),
+    feature_versions = c("features_cell_v1_network_v1", "features_cell_v1_network_v2",
+                         "features_cell_v1_network_v3", "features_cell_v1_network_v4",
+                         "features_cell_v2_network_v1", "features_cell_v2_network_v2",
+                         "features_cell_v2_network_v3", "features_cell_v2_network_v4"),
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
-    feature_lst = c("raw", "prop", "all")
+    feature_lst = c("raw_incoming", "raw_outgoing", "raw_bidirectional",
+                    "prop_incoming", "prop_bidirectional",
+                    "all_incoming", "all_outgoing", "all_bidirectional")
   )
-) |> bind_rows(
-  tibble(
-    data_lst = rep(features_lst_contact, times = 2) |> 
-      map2(rep(features, each = 4), \(feature, feature_msgs)
-          feature |> 
-            left_join(labels, by = "subid") |>
-            left_join(feature_msgs, by = "subid") |> 
-            mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
-            select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c("features_msgs_v1_contact_v1", "features_msgs_v1_contact_v2",
-                         "features_msgs_v1_contact_v3", "features_msgs_v1_contact_v4",
-                         "features_msgs_v2_contact_v1", "features_msgs_v2_contact_v2",
-                         "features_msgs_v2_contact_v3", "features_msgs_v2_contact_v4"),
-    outcome_lst = "binary"
-  ) |> expand_grid(
-    model_lst = "logistic",
-    feature_lst = c("raw", "prop", "all")
-  )
-)
+) 
+
+# configs <- configs |> bind_rows(
+#   tibble(
+#     data_lst = rep(features_lst_network, times = 2) |> 
+#       map2(rep(features, each = 4), \(feature, feature_cell)
+#           feature |> 
+#             left_join(labels, by = "subid") |>
+#             left_join(feature_cell, by = "subid") |> 
+#             mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
+#             select(-n_lapse, -day_on_study, -subid)),
+#     feature_versions = c("features_cell_v1_network_v1", "features_cell_v1_network_v2",
+#                          "features_cell_v1_network_v3", "features_cell_v1_network_v4",
+#                          "features_cell_v2_network_v1", "features_cell_v2_network_v2",
+#                          "features_cell_v2_network_v3", "features_cell_v2_network_v4"),
+#     outcome_lst = "binary"
+#   ) |> expand_grid(
+#     model_lst = "logistic",
+#     feature_lst = c("raw_incoming", "raw_outgoing", "raw_bidirectional",
+#                     "prop_incoming", "prop_bidirectional",
+#                     "all_incoming", "all_outgoing", "all_bidirectional")
+#   )
+# )
 ```
 
-**full w/ contact features**
+**full w/ network features**
 
 ```{r}
 configs <- configs |> bind_rows(
   tibble(
-    data_lst = rep(features_lst_contact, times = 2) |> 
-      map2(rep(features, each = 4), \(feature, feature_msgs)
+    data_lst = rep(features_lst_network, times = 2) |> 
+      map2(rep(features, each = 4), \(feature, feature_cell)
           feature |> 
             left_join(labels, by = "subid") |>
-            left_join(feature_msgs, by = "subid") |> 
+            left_join(feature_cell, by = "subid") |> 
             left_join(baseline |> select(subid, starts_with("demo")), 
                       by = "subid") |>
             mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c("features_msgs_v1_contact_v1_full",
-                         "features_msgs_v1_contact_v2_full",
-                         "features_msgs_v1_contact_v3_full", 
-                         "features_msgs_v1_contact_v4_full",
-                         "features_msgs_v2_contact_v1_full",
-                         "features_msgs_v2_contact_v2_full",
-                         "features_msgs_v2_contact_v3_full", 
-                         "features_msgs_v2_contact_v4_full"),
+    feature_versions = c("features_cell_v1_network_v1_full",
+                         "features_cell_v1_network_v2_full",
+                         "features_cell_v1_network_v3_full", 
+                         "features_cell_v1_network_v4_full",
+                         "features_cell_v2_network_v1_full",
+                         "features_cell_v2_network_v2_full",
+                         "features_cell_v2_network_v3_full", 
+                         "features_cell_v2_network_v4_full"),
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
-    feature_lst = c("raw", "prop", "all")
+    feature_lst = c("raw_incoming", "raw_outgoing", "raw_bidirectional",
+                    "prop_incoming", "prop_bidirectional",
+                    "all_incoming", "all_outgoing", "all_bidirectional")
   )
-) |> bind_rows(
-  tibble(
-    data_lst = rep(features_lst_contact, times = 2) |> 
-      map2(rep(features, each = 4), \(feature, feature_msgs)
-          feature |> 
-            left_join(labels, by = "subid") |>
-            left_join(feature_msgs, by = "subid") |>
-            left_join(baseline |> select(subid, starts_with("demo")), 
-                      by = "subid") |>
-            mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
-            select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = c("features_msgs_v1_contact_v1_full",
-                         "features_msgs_v1_contact_v2_full",
-                         "features_msgs_v1_contact_v3_full", 
-                         "features_msgs_v1_contact_v4_full",
-                         "features_msgs_v2_contact_v1_full",
-                         "features_msgs_v2_contact_v2_full",
-                         "features_msgs_v2_contact_v3_full", 
-                         "features_msgs_v2_contact_v4_full"),
-    outcome_lst = "binary"
-  ) |> expand_grid(
-    model_lst = "logistic",
-    feature_lst = c("raw", "prop", "all")
-  )
-)
+) 
+
+# configs <- configs |> bind_rows(
+#   tibble(
+#     data_lst = rep(features_lst_network, times = 2) |> 
+#       map2(rep(features, each = 4), \(feature, feature_cell)
+#           feature |> 
+#             left_join(labels, by = "subid") |>
+#             left_join(feature_cell, by = "subid") |>
+#             left_join(baseline |> select(subid, starts_with("demo")), 
+#                       by = "subid") |>
+#             mutate(lapse = if_else(n_lapse/day_on_study < .15, "no", "yes")) |>
+#             select(-n_lapse, -day_on_study, -subid)),
+#     feature_versions = c("features_cell_v1_network_v1_full",
+#                          "features_cell_v1_network_v2_full",
+#                          "features_cell_v1_network_v3_full", 
+#                          "features_cell_v1_network_v4_full",
+#                          "features_cell_v2_network_v1_full",
+#                          "features_cell_v2_network_v2_full",
+#                          "features_cell_v2_network_v3_full", 
+#                          "features_cell_v2_network_v4_full"),
+#     outcome_lst = "binary"
+#   ) |> expand_grid(
+#     model_lst = "logistic",
+#     feature_lst = c("raw_incoming", "raw_outgoing", "raw_bidirectional",
+#                     "prop_incoming", "prop_bidirectional",
+#                     "all_incoming", "all_outgoing", "all_bidirectional")
+#   )
+# )
 ```
 ### Modeling 
 
@@ -281,4 +305,25 @@ best_models |>
   write_rds(here::here(path_models, "best_models_glmnet_v2.rds"))
 ```
 
+```{r}
+err_tbl_1 <- read_csv("_results/err_tbl_glmnet_v1.csv")
+best_models_1 <- read_rds(here::here(path_models, "best_models_glmnet_v1.rds"))
+
+err_tbl_all <- err_tbl_1 |> 
+  bind_rows(err_tbl)
+```
+
+```{r}
+best_models[[124]] |> 
+  tidy() |> 
+  arrange(desc(abs(estimate)))
+
+best_models_1[[20]] |> 
+  tidy() |> 
+  arrange(desc(abs(estimate)))
+
+best_models[[5]] |> 
+  tidy() |> 
+  arrange(desc(abs(estimate)))
+```
 

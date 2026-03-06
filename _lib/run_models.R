@@ -29,13 +29,22 @@ run_glmnet <- function(data, outcome, model, feature_set,
     vfold_cv(v = 5, repeats = 6, strata = "lapse")
   
   rec <- recipe(lapse ~ ., data = data)
-  if (feature_set == "raw"){
-    rec <- rec |> 
-      step_select(-starts_with("prop_"))
-  } else if (feature_set == "prop"){
-    rec <- rec |>
-      step_select(-starts_with("n_"))
-  }
+  
+  if (str_detect(feature_set, "raw")) {
+    rec <- rec |> step_select(-starts_with("prop_"))
+  } 
+  
+  if (str_detect(feature_set, "prop")) {
+    rec <- rec |> step_select(-starts_with("n_"))
+  } 
+  
+  if (str_detect(feature_set, "incoming")){
+    rec <- rec |> step_select(-contains("outgoing"))
+  } 
+  
+  if (str_detect(feature_set, "outgoing")){
+    rec <- rec |> step_select(-contains("incoming"))
+  } 
 
   if (outcome == "continuous"){
 
