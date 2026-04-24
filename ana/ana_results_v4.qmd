@@ -1,0 +1,736 @@
+---
+title: "Analysis on Models with Contact & Communication Network Features"
+author: "Coco Yu"
+date: "`r lubridate::today()`"
+format:
+  html:
+    toc: true 
+    toc_depth: 4
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+### Setup
+
+Chunk Defaults
+```{r}
+knitr::opts_chunk$set(attr.output='style="max-height: 500px;"')
+
+suppressPackageStartupMessages(library(tidyposterior))
+library(tidyverse)
+library(tidymodels)
+options(conflicts.policy = "depends.ok")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_ml.R?raw=true")
+
+library(kableExtra, exclude = "group_rows")
+library(lubridate)
+library(janitor, include.only = c("tabyl", "clean_names"))
+library(Matrix, exclude = c("expand", "pack", "unpack"))
+library(poissonreg)
+library(DALEX, exclude= "explain")
+library(DALEXtra)
+
+theme_set(theme_classic()) 
+```
+
+Absolute Paths 
+```{r}
+source("https://github.com/jjcurtin/lab_support/blob/main/format_path.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_eda.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_plots.R?raw=true")
+source("_lib/ana_models.R")
+
+path_network <- format_path(str_c("risk/data_processed/network"))
+path_models <- format_path(str_c("risk/models/network"))
+```
+
+### Read in Data
+
+```{r}
+err_tbl <- read_csv("_results/err_tbl_glmnet_v4.csv")
+
+fits_lst <- read_rds(here::here(path_models, "fits_lst_glmnet_v4.rds"))
+
+best_models <- read_rds(here::here(path_models, "best_models_glmnet_v4.rds"))
+
+features_contacts <- read_csv(here::here(path_network, "features_network_v7.csv"))
+features_communications <- read_csv(here::here(path_network, "features_network_v8.csv"))
+features_contacts_communications <- features_contacts |> 
+  left_join(features_communications, by = "subid")
+labels <- read_csv(here::here(path_network, "labels.csv"))
+features_baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
+```
+
+```{r}
+features_full <- features_contacts_communications |> 
+  left_join(features_baseline, by = "subid") |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
+  select(-n_lapse, -day_on_study, -subid)
+
+features_ablate_communications <- features_contacts |> 
+  left_join(features_baseline, by = "subid") |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
+  select(-n_lapse, -day_on_study, -subid)
+
+features_ablate_contacts <- features_communications |> 
+  left_join(features_baseline, by = "subid") |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
+  select(-n_lapse, -day_on_study, -subid)
+
+features_ablate_contacts_communications <- features_baseline |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
+  select(-n_lapse, -day_on_study, -subid)
+
+
+```
+
+
+### Best Models
+
+COCO: name convention -> change full to id
+combined to contacts_communications
+
+ablating (unique variance) -> start with full model, ablate contacts only, then ablate communications only, ablate id only, ablate both contacts & communications
+
+total variance -> contacts only, communications only, ID only(??)
+
+```{r}
+# best full model
+id_full <- err_tbl |> 
+  filter(feature_version == "features_combined_full") |> 
+  arrange(desc(rsq_median)) |> 
+  slice_head(n = 1) |> 
+  pull(id) |> 
+  as.numeric()
+
+# ablate contacts
+id_ablate_contacts <- err_tbl |> 
+  filter(feature_version == "features_communications_full") |> 
+  arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+# ablate communications
+id_ablate_communications <- err_tbl |>
+  filter(feature_version == "features_contacts_full") |> 
+  arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+# ablate contacts & communications
+id_ablate_contacts_communications <- err_tbl |> 
+  filter(feature_version == "features_baseline") |> 
+  arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+# contacts only
+id_contacts <- err_tbl |> 
+  filter(feature_version == "features_contacts") |> 
+  arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+# communications only
+id_communications <- err_tbl |> 
+  filter(feature_version == "features_communications") |> 
+  arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+```
+
+```{r}
+# best baseline model
+id_baseline <- err_tbl |> 
+  filter(feature_version == "features_baseline") |> 
+  arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+# add in contacts features
+id_contacts <- err_tbl |> 
+  filter(feature_version == "features_contacts_full") |> 
+  arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+# add in communication features
+id_communications <- err_tbl |> 
+  filter(feature_version == "features_communications_full") |> 
+  arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+
+# full model
+id_full <- err_tbl |> 
+  filter(feature_version == "features_combined_full") |> 
+  arrange(desc(rsq_median)) |> 
+	slice_head(n = 1) |> 
+	pull(id) |> 
+	as.numeric()
+```
+
+```{r}
+err_tbl |> 
+  filter(id %in% c(id_full, id_ablate_contacts, id_ablate_communications, 
+                   id_ablate_contacts_communications, id_contacts, 
+                   id_communications)) |> 
+  print_kbl()
+```
+
+
+### Interpretations
+
+**Regression Coefficients**
+
+```{r}
+best_models[[id_full]] |> 
+  tidy() |> 
+  arrange(desc(abs(estimate))) |> 
+  print_kbl()
+
+best_models[[id_ablate_contacts]] |>
+  tidy() |> 
+  arrange(desc(abs(estimate))) |> 
+  print_kbl()
+
+best_models[[id_ablate_communications]] |>
+  tidy() |> 
+  arrange(desc(abs(estimate))) |> 
+  print_kbl()
+
+best_models[[id_ablate_contacts_communications]] |>
+  tidy() |> 
+  arrange(desc(abs(estimate))) |>
+  print_kbl()
+
+best_models[[id_contacts]] |> 
+  tidy() |> 
+  arrange(desc(abs(estimate))) |> 
+  print_kbl()
+
+best_models[[id_communications]] |> 
+  tidy() |> 
+  arrange(desc(abs(estimate))) |> 
+  print_kbl()
+```
+
+**Feature Importance**
+
+```{r}
+predict_wrapper <- function(model, newdata) {
+  predict(model, newdata) |> 
+    pull(.pred)
+}
+
+get_shaps <- function(df1){
+  predict_parts(explain_full, 
+                new_observation = df1,
+                type = "shap",
+                B = 25) |> 
+    filter(B == 0) |> 
+    select(variable_name, variable_value, contribution) |> 
+    as_tibble()
+}
+
+```
+
+```{r}
+rec_baseline <- recipe(lapse ~ ., data = features_baseline) |> 
+      step_impute_median(all_numeric_predictors()) |> 
+      step_impute_mode(all_nominal_predictors()) |>
+      step_dummy(all_nominal_predictors()) |> 
+      step_zv(all_predictors()) |> 
+      step_nzv(all_predictors()) |>
+      step_normalize(all_numeric_predictors())
+feat_baseline <- rec_baseline |> prep(features_baseline) |> bake(new_data = NULL)
+
+rec_contacts <- recipe(lapse ~ ., data = features_contacts) |> 
+      step_select(-starts_with("n_")) |> 
+      step_impute_median(all_numeric_predictors()) |> 
+      step_impute_mode(all_nominal_predictors()) |>
+      step_dummy(all_nominal_predictors()) |> 
+      step_zv(all_predictors()) |> 
+      step_nzv(all_predictors()) |>
+      step_normalize(all_numeric_predictors())
+feat_contacts <- rec_contacts |> prep(features_contacts) |> bake(new_data = NULL)
+
+rec_communications <- recipe(lapse ~ ., data = features_communications) |> 
+      step_select(-starts_with("n_")) |> 
+      step_impute_median(all_numeric_predictors()) |> 
+      step_impute_mode(all_nominal_predictors()) |>
+      step_dummy(all_nominal_predictors()) |> 
+      step_zv(all_predictors()) |> 
+      step_nzv(all_predictors()) |>
+      step_normalize(all_numeric_predictors())
+feat_communications <- rec_communications |> prep(features_communications) |> bake(new_data = NULL)
+
+rec_full <- recipe(lapse ~ ., data = features_combined) |> 
+      step_select(-starts_with("n_")) |> 
+      step_impute_median(all_numeric_predictors()) |> 
+      step_impute_mode(all_nominal_predictors()) |>
+      step_dummy(all_nominal_predictors()) |> 
+      step_zv(all_predictors()) |> 
+      step_nzv(all_predictors()) |>
+      step_normalize(all_numeric_predictors())
+feat_full <- rec_full |> prep(features_combined) |> bake(new_data = NULL)
+```
+
+**baseline**
+
+```{r}
+explain_full <- explain_tidymodels(best_models[[id_baseline]],  
+                                   data = feat_baseline |> select(-lapse), 
+                                   y = feat_baseline$lapse, 
+                                   predict_function = predict_wrapper)
+
+local_shap_baseline <- feat_baseline |>
+  select(-lapse) |> 
+  mutate(id = row_number()) |>
+  nest(.by = id, .key = "dfs") |> 
+  mutate(shaps = map(dfs, \(df1) get_shaps(df1))) |> 
+  select(-dfs) |>
+  unnest(shaps)
+
+# local_shap_baseline <- local_shap_baseline |> 
+#   mutate(variable_name = case_when(
+#     str_detect(variable_name, "demo_educ") ~ "demo_education",
+#     str_detect(variable_name, "demo_marital") ~ "demo_marital_status",
+#     str_detect(variable_name, "demo_race") ~ "demo_race",
+#     str_detect(variable_name, "demo_sex") ~ "demo_sex",
+#     str_detect(variable_name, "_support") ~ "prop_social_support",
+#     str_detect(variable_name, "drinker") ~ "prop_drink_status",
+#     str_detect(variable_name, "drank") ~ "prop_drink_history",
+#     str_detect(variable_name, "drink_future") ~ "prop_drink_presence",
+#     variable_name %in% c("prop_pleasant", "prop_unpleasant", "prop_neutral",
+#                          "prop_mixed_exp") ~ "prop_affect_exp",
+#     variable_name == "prop_recovery" ~ "prop_know_recovery",
+#     TRUE ~ variable_name
+#   ))
+
+local_shap_baseline |>
+  mutate(contribution = abs(contribution)) |>
+  group_by(variable_name) |>
+  summarize(mean_shap = mean(contribution)) |>
+  arrange(desc(mean_shap)) |>
+  mutate(variable_name = factor(variable_name),
+         variable_name = fct_reorder(variable_name, mean_shap)) |>
+  ggplot(aes(x = variable_name, y = mean_shap)) +
+  geom_point() +
+  coord_flip()
+```
+
+**contacts**
+
+```{r}
+explain_full <- explain_tidymodels(best_models[[id_contacts]],  
+                                   data = feat_contacts, 
+                                   y = features_contacts$lapse, 
+                                   predict_function = predict_wrapper)
+
+local_shap_contacts <- feat_contacts |>
+  select(-lapse) |> 
+  mutate(id = row_number()) |>
+  nest(.by = id, .key = "dfs") |> 
+  mutate(shaps = map(dfs, \(df1) get_shaps(df1))) |> 
+  select(-dfs) |>
+  unnest(shaps)
+
+# local_shap_contacts <- local_shap_contacts |> 
+#   mutate(variable_name = case_when(
+#     str_detect(variable_name, "demo_educ") ~ "demo_education",
+#     str_detect(variable_name, "demo_marital") ~ "demo_marital_status",
+#     str_detect(variable_name, "demo_race") ~ "demo_race",
+#     str_detect(variable_name, "demo_sex") ~ "demo_sex",
+#     str_detect(variable_name, "_support") ~ "prop_social_support",
+#     str_detect(variable_name, "drinker") ~ "prop_drink_status",
+#     str_detect(variable_name, "drank") ~ "prop_drink_history",
+#     str_detect(variable_name, "drink_future") ~ "prop_drink_presence",
+#     variable_name %in% c("prop_pleasant", "prop_unpleasant", "prop_neutral",
+#                          "prop_mixed_exp") ~ "prop_affect_exp",
+#     variable_name == "prop_recovery" ~ "prop_know_recovery",
+#     TRUE ~ variable_name
+#   ))
+
+local_shap_contacts |>
+  mutate(contribution = abs(contribution)) |>
+  group_by(variable_name) |>
+  summarize(mean_shap = mean(contribution)) |>
+  arrange(desc(mean_shap)) |>
+  mutate(variable_name = factor(variable_name),
+         variable_name = fct_reorder(variable_name, mean_shap)) |>
+  ggplot(aes(x = variable_name, y = mean_shap)) +
+  geom_point() +
+  coord_flip()
+```
+
+**communications**
+
+```{r}
+explain_full <- explain_tidymodels(best_models[[id_communications]],  
+                                   data = feat_communications, 
+                                   y = features_communications$lapse, 
+                                   predict_function = predict_wrapper)
+
+local_shap_communications <- feat_communications |>
+  select(-lapse) |> 
+  mutate(id = row_number()) |>
+  nest(.by = id, .key = "dfs") |> 
+  mutate(shaps = map(dfs, \(df1) get_shaps(df1))) |> 
+  select(-dfs) |>
+  unnest(shaps)
+
+# local_shap_communications <- local_shap_communications |> 
+#   mutate(variable_name = case_when(
+#     str_detect(variable_name, "demo_educ") ~ "demo_education",
+#     str_detect(variable_name, "demo_marital") ~ "demo_marital_status",
+#     str_detect(variable_name, "demo_race") ~ "demo_race",
+#     str_detect(variable_name, "demo_sex") ~ "demo_sex",
+#     str_detect(variable_name, "_support") ~ "prop_social_support",
+#     str_detect(variable_name, "drinker") ~ "prop_drink_status",
+#     str_detect(variable_name, "drank") ~ "prop_drink_history",
+#     str_detect(variable_name, "drink_future") ~ "prop_drink_presence",
+#     variable_name %in% c("prop_pleasant", "prop_unpleasant", "prop_neutral",
+#                          "prop_mixed_exp") ~ "prop_affect_exp",
+#     variable_name == "prop_recovery" ~ "prop_know_recovery",
+#     TRUE ~ variable_name
+#   ))
+
+local_shap_communications |>
+  mutate(contribution = abs(contribution)) |>
+  group_by(variable_name) |>
+  summarize(mean_shap = mean(contribution)) |>
+  arrange(desc(mean_shap)) |>
+  mutate(variable_name = factor(variable_name),
+         variable_name = fct_reorder(variable_name, mean_shap)) |>
+  ggplot(aes(x = variable_name, y = mean_shap)) +
+  geom_point() +
+  coord_flip()
+```
+
+
+**full**
+
+```{r}
+explain_full <- explain_tidymodels(best_models[[id_full]],  
+                                   data = feat_full, 
+                                   y = feat_full$lapse, 
+                                   predict_function = predict_wrapper)
+
+local_shap_full <- feat_full |>
+  select(-lapse) |> 
+  mutate(id = row_number()) |>
+  nest(.by = id, .key = "dfs") |> 
+  mutate(shaps = map(dfs, \(df1) get_shaps(df1))) |> 
+  select(-dfs) |>
+  unnest(shaps)
+
+# local_shap_full <- local_shap_full |> 
+#   mutate(variable_name = case_when(
+#     str_detect(variable_name, "demo_educ") ~ "demo_education",
+#     str_detect(variable_name, "demo_marital") ~ "demo_marital_status",
+#     str_detect(variable_name, "demo_race") ~ "demo_race",
+#     str_detect(variable_name, "demo_sex") ~ "demo_sex",
+#     str_detect(variable_name, "_support") ~ "prop_social_support",
+#     str_detect(variable_name, "drinker") ~ "prop_drink_status",
+#     str_detect(variable_name, "drank") ~ "prop_drink_history",
+#     str_detect(variable_name, "drink_future") ~ "prop_drink_presence",
+#     variable_name %in% c("prop_pleasant", "prop_unpleasant", "prop_neutral",
+#                          "prop_mixed_exp") ~ "prop_affect_exp",
+#     variable_name == "prop_recovery" ~ "prop_know_recovery",
+#     TRUE ~ variable_name
+#   ))
+
+local_shap_full |>
+  mutate(contribution = abs(contribution)) |>
+  group_by(variable_name) |>
+  summarize(mean_shap = mean(contribution)) |>
+  arrange(desc(mean_shap)) |>
+  mutate(variable_name = factor(variable_name),
+         variable_name = fct_reorder(variable_name, mean_shap)) |>
+  ggplot(aes(x = variable_name, y = mean_shap)) +
+  geom_point() +
+  coord_flip()
+```
+
+### Bayesian Comparison
+
+```{r}
+metrics_full <- best_config_metrics(fits_lst[[id_full]], metric = "rsq")
+metrics_ablate_contacts <- best_config_metrics(fits_lst[[id_ablate_contacts]], 
+                                               metric = "rsq")
+metrics_ablate_communications <- best_config_metrics(fits_lst
+                                                     [[id_ablate_communications]], metric = "rsq")
+metrics_ablate_contacts_communications <- best_config_metrics(fits_lst
+                                                              [[id_ablate_contacts_communications]], 
+                                                              metric = "rsq")
+metrics_contacts <- best_config_metrics(fits_lst[[id_contacts]], metric = "rsq")
+metrics_communications <- best_config_metrics(fits_lst[[id_communications]], metric = "rsq")
+```
+
+#### Full and Ablated Model
+
+```{r}
+set.seed(101)
+
+pp <- metrics_full |>
+  select(id, id2, .estimate) |>
+  mutate(.estimate = pmin(pmax(.estimate, 1e-6), 1 - 1e-6)) |>
+  rename(full = .estimate) |>
+  inner_join(
+    metrics_ablate_contacts |>
+      select(id, id2, .estimate) |>
+      mutate(.estimate = pmin(pmax(.estimate, 1e-6), 1 - 1e-6)) |>
+      rename(ablate_contacts = .estimate),
+    by = c("id", "id2")
+  ) |>
+  inner_join(
+    metrics_ablate_communications |>
+      select(id, id2, .estimate) |>
+      mutate(.estimate = pmin(pmax(.estimate, 1e-6), 1 - 1e-6)) |>
+      rename(ablate_communications = .estimate),
+    by = c("id", "id2")
+  ) |>
+  inner_join(
+    metrics_ablate_contacts_communications |>
+      select(id, id2, .estimate) |>
+      mutate(.estimate = pmin(pmax(.estimate, 1e-6), 1 - 1e-6)) |>
+      rename(ablate_both = .estimate),
+    by = c("id", "id2")
+  ) |>
+  perf_mod(
+    formula = statistic ~ model + (1 | id2/id),
+    transform = tidyposterior::logit_trans,
+    iter = 5000,
+    chains = 4,
+    adapt_delta = 0.9999,
+    family = gaussian
+  )
+```
+
+```{r}
+pp_perf_tibble <- pp |>
+  tidy(seed = 123) |>
+  mutate(
+    model = factor(
+      model,
+      levels = c(
+        "full",
+        "ablate_contacts",
+        "ablate_communications",
+        "ablate_both"
+      )
+    )
+  ) |>
+  group_by(model) |>
+  summarize(
+    pp_median = quantile(posterior, 0.5),
+    pp_lower  = quantile(posterior, 0.025),
+    pp_upper  = quantile(posterior, 0.975),
+    .groups = "drop"
+  ) |>
+  arrange(model)
+
+pp_perf_tibble
+```
+
+```{r}
+pp_contrast <- tribble(
+  ~model_1,               ~model_2,                 ~label,
+  "full",                 "ablate_contacts",        "drop contacts",
+  "full",                 "ablate_communications",  "drop communications",
+  "full",                 "ablate_both",            "drop both"
+) |>
+  pmap_dfr(\(model_1, model_2, label) {
+    draws <- pp |>
+      contrast_models(list(model_2), list(model_1))
+    
+    draws |>
+      summary(size = 0) |>
+      mutate(
+        probability = 1 - probability,
+        contrast = label
+      ) |>
+      select(contrast, mean, lower, upper, probability) |>
+      left_join(
+        draws |>
+          summarize(median = quantile(difference, 0.5)),
+        by = character()
+      ) |>
+      select(contrast, median, everything())
+  })
+
+pp_contrast
+
+```
+
+```{r}
+df_plot <- pp |>
+  tidy(seed = 123) |>
+  mutate(
+    model = factor(
+      model,
+      levels = c("full", "ablate_contacts", "ablate_communications", "ablate_both"),
+      labels = c(
+        "Full model",
+        "Ablate contacts",
+        "Ablate communications",
+        "Ablate contacts and communications"
+      )
+    )
+  )
+
+df_plot |>
+  group_by(model) |>
+  summarize(
+    median = median(posterior),
+    lower  = quantile(posterior, 0.025),
+    upper  = quantile(posterior, 0.975),
+    .groups = "drop"
+  ) |>
+  ggplot(aes(x = model, y = median)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  labs(x = NULL, y = "Posterior performance")
+```
+
+#### Contacts only, communications only models
+
+```{r}
+set.seed(101)
+
+pp_2 <- metrics_contacts |>
+  select(id, id2, .estimate) |>
+  mutate(.estimate = pmin(pmax(.estimate, 1e-6), 1 - 1e-6)) |>
+  rename(contacts = .estimate) |>
+  inner_join(
+    metrics_communications |>
+      select(id, id2, .estimate) |>
+      mutate(.estimate = pmin(pmax(.estimate, 1e-6), 1 - 1e-6)) |>
+      rename(communications = .estimate),
+    by = c("id", "id2")
+  ) |>
+  inner_join(
+    metrics_ablate_contacts_communications |>
+      select(id, id2, .estimate) |>
+      mutate(.estimate = pmin(pmax(.estimate, 1e-6), 1 - 1e-6)) |>
+      rename(id_demo = .estimate),
+    by = c("id", "id2")
+  ) |>
+  perf_mod(
+    formula = statistic ~ model + (1 | id2/id),
+    transform = tidyposterior::logit_trans,
+    iter = 5000,
+    chains = 4,
+    adapt_delta = 0.9999,
+    family = gaussian
+  )
+```
+
+```{r}
+pp_perf_tibble_2 <- pp_2 |>
+  tidy(seed = 123) |>
+  mutate(
+    model = factor(
+      model,
+      levels = c(
+        "id_demo",
+        "contacts",
+        "communications"
+      )
+    )
+  ) |>
+  group_by(model) |>
+  summarize(
+    pp_median = quantile(posterior, 0.5),
+    pp_lower  = quantile(posterior, 0.025),
+    pp_upper  = quantile(posterior, 0.975),
+    .groups = "drop"
+  ) |>
+  arrange(model)
+
+pp_perf_tibble_2
+```
+
+```{r}
+pp_contrast_2 <- tribble(
+  ~model_1,          ~model_2,           ~label,
+  "id_demo",         "communications",   "id_demo vs. communications",
+  "id_demo",         "contacts",         "id_demo vs. contacts",
+  "communications",  "contacts",         "communications vs. contacts"
+) |>
+  pmap_dfr(\(model_1, model_2, label) {
+    draws <- pp_2 |>
+      contrast_models(list(model_2), list(model_1))
+    
+    draws |>
+      summary(size = 0) |>
+      mutate(contrast = label) |>
+      select(contrast, mean, lower, upper, probability) |>
+      left_join(
+        draws |>
+          summarize(median = quantile(difference, 0.5)),
+        by = character()
+      ) |>
+      select(contrast, median, everything())
+  })
+
+pp_contrast_2
+
+```
+
+```{r}
+df_plot_2 <- pp_2 |>
+  tidy(seed = 123) |>
+  mutate(
+    model = factor(
+      model,
+      levels = c("id_demo", "contacts", "communications"),
+      labels = c(
+        "ID + demographics",
+        "Contacts",
+        "Communications"
+      )
+    )
+  )
+
+df_plot_2 |>
+  group_by(model) |>
+  summarize(
+    median = median(posterior),
+    lower  = quantile(posterior, 0.025),
+    upper  = quantile(posterior, 0.975),
+    .groups = "drop"
+  ) |>
+  ggplot(aes(x = model, y = median)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  labs(x = NULL, y = "Posterior performance")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

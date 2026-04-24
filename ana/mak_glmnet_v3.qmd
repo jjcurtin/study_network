@@ -11,6 +11,16 @@ editor_options:
   chunk_output_type: console
 ---
 
+**COCO**: add in n_spouse, no prop_spouse or prop_prof
+
+no need for n_incoming, n_outgoing, only keep prop
+
+drop raw keep prop in communications (should be the same as in contacts)
+
+report full model (with all features) -> what features matter, remove contacts
+
+report how each model performs
+
 ### Setup
 
 Chunk Defaults
@@ -48,17 +58,21 @@ path_models <- format_path(str_c("risk/models/network"))
 ### Read in Data
 
 ```{r}
-features_v7 <- read_csv(here::here(path_network, "features_network_v7.csv"))
-features_v8 <- read_csv(here::here(path_network, "features_network_v8.csv"))
+features_contacts <- read_csv(here::here(path_network, "features_network_v7.csv"))
+features_communications <- read_csv(here::here(path_network, "features_network_v8.csv"))
+features_combined <- features_contacts |> 
+  left_join(features_communications, by = "subid")
 labels <- read_csv(here::here(path_network, "labels.csv"))
 baseline <- read_csv(here::here(path_network, "features_baseline.csv"))
 ```
 
 ```{r}
-features <- list(features_v7, features_v8)
+features <- list(features_contacts, features_communications, features_combined)
 feature_versions <- c(
-                   "features_contact_v7", "features_contact_v8",
-                   "features_full_v7", "features_full_v8")
+                   "features_contacts", "features_communications", 
+                   "features_combined",
+                   "features_contacts_full", "features_communications_full", 
+                   "features_combined_full")
 
 configs <- tibble()
 ```
@@ -81,7 +95,7 @@ configs <- configs |> bind_rows(expand.grid(
 
 ```
 
-**Contact Features**
+**Network Features Only**
 ```{r}
 configs <- configs |> bind_rows(
   tibble(
@@ -91,7 +105,7 @@ configs <- configs |> bind_rows(
             left_join(labels, by = "subid") |>
             mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[1:2],
+    feature_versions = feature_versions[1:3],
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
@@ -113,7 +127,7 @@ configs <- configs |> bind_rows(
             left_join(baseline |> select(subid, starts_with("demo")), 
                       by = "subid") |>
             select(-n_lapse, -day_on_study, -subid)),
-    feature_versions = feature_versions[3:4],
+    feature_versions = feature_versions[4:6],
     outcome_lst = "continuous"
   ) |> expand_grid(
     model_lst = c("poisson", "normal"),
@@ -149,13 +163,33 @@ map(
 
 ```{r}
 err_tbl |>
-  write_csv("_results/err_tbl_glmnet_v3.csv")
+  write_csv("_results/err_tbl_glmnet_v4.csv")
 
-# fits_lst |>
-#   write_rds(here::here(path_models, "fits_lst_glmnet_v3.rds"))
-# 
-# best_models |> 
-#   write_rds(here::here(path_models, "best_models_glmnet_v3.rds"))
+fits_lst |>
+  write_rds(here::here(path_models, "fits_lst_glmnet_v4.rds"))
+
+best_models |>
+  write_rds(here::here(path_models, "best_models_glmnet_v4.rds"))
 ```
 
+```{r}
+results <- features_combined |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
+  select(lapse,
+         prop_friend, prop_drink_presence, prop_support,
+         prop_incoming_counselor) |> 
+  run_glmnet(outcome = "continuous", model = "poisson", 
+             feature_set = "prop")
+```
+
+```{r}
+features_combined |> 
+  left_join(labels, by = "subid") |>
+  mutate(lapse = as.integer(n_lapse / day_on_study * 91)) |>
+  select(lapse,
+         prop_friend, prop_drink_presence, prop_support,
+         prop_incoming_counselor) |>
+  lm(lapse ~ ., data = _)
+```
 
